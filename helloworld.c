@@ -4,10 +4,18 @@
 #include <psapi.h>
 #include <shlwapi.h>
 #include <tlhelp32.h>
+#include "fzf\\fzf.h"
 
 #ifndef CTRL
 #define CTRL(c) ((c) & 037)
 #endif
+
+#define COLOR_GREY 67
+#define NORMAL_UNSELECTED_TEXT_PAIR 1
+#define NORMAL_SELECTED_TEXT_PAIR 2
+#define FUZZYMATCH_UNSELECTED_TEXT 3
+#define FUZZYMATCH_SELECTED_TEXT 4
+#define HEADER_TEXT_PAIR 5
 
 NUMBERFMT numFmt = { 0 };
 
@@ -70,6 +78,7 @@ int g_numberOfDisplayItems = 0;
 int g_selectedIndex = 0;
 
 int g_nameWidth = 0;
+fzf_slab_t *slab;
 
 void FormatNumber(CHAR *buf, size_t toFormat, NUMBERFMT* fmt)
 {
@@ -419,7 +428,7 @@ void populate_cpu_stats()
     g_lastProcessIoReadings = newIoReadings;
 }
 
-void print_process(Process *process, int index)
+void print_process(Process *process, int index, fzf_position_t *fzfPosition)
 {
     if(g_selectedIndex > g_numberOfDisplayItems)
     {
@@ -434,7 +443,11 @@ void print_process(Process *process, int index)
 
     if(index == g_selectedIndex)
     {
-        wattron(window, A_REVERSE);
+        wattron(window, COLOR_PAIR(NORMAL_SELECTED_TEXT_PAIR));
+    }
+    else
+    {
+        wattron(window, COLOR_PAIR(NORMAL_UNSELECTED_TEXT_PAIR));
     }
 
     mvwprintw(
@@ -452,15 +465,60 @@ void print_process(Process *process, int index)
             process->ioReadsPerSecond,
             process->ioWritesPerSecond);
 
+    if(fzfPosition)
+    {
+        SIZE sz;
+        if(fzfPosition && fzfPosition->size > 0)
+        {
+            for(int i = 0; i < fzfPosition->size; i++)
+            {
+                wmove(window, index + 2, fzfPosition->data[i] + 1);
+                if(index == g_selectedIndex)
+                {
+                    wattron(window, COLOR_PAIR(FUZZYMATCH_SELECTED_TEXT));
+                }
+                else
+                {
+                    wattron(window, COLOR_PAIR(FUZZYMATCH_UNSELECTED_TEXT));
+                }
+                waddch(window, process->name[fzfPosition->data[i]]);
+                if(index == g_selectedIndex)
+                {
+                    wattroff(window, COLOR_PAIR(FUZZYMATCH_SELECTED_TEXT));
+                }
+                else
+                {
+                    wattroff(window, COLOR_PAIR(FUZZYMATCH_UNSELECTED_TEXT));
+                }
+            }
+        }
+    }
+
     if(index == g_selectedIndex)
     {
-        wattroff(window, A_REVERSE);
+        wattroff(window, COLOR_PAIR(NORMAL_SELECTED_TEXT_PAIR));
     }
+    else
+    {
+        wattroff(window, COLOR_PAIR(NORMAL_UNSELECTED_TEXT_PAIR));
+    }
+}
+
+void kill_process(Process *process)
+{
+    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, process->pid);
+    TerminateProcess(hProcess, 0);
+    CloseHandle(hProcess);
 }
 
 void print_process_by_index(int index)
 {
-    print_process(g_displayProcesses[index], index);
+    fzf_pattern_t *pattern = fzf_parse_pattern(CaseSmart, false, g_searchStirng, true);
+    fzf_position_t *pos = fzf_get_positions(g_displayProcesses[index]->name, pattern, slab);
+    print_process(g_displayProcesses[index], index, pos);
+    fzf_free_positions(pos);
+    fzf_free_pattern(pattern);
+    /* print_process(g_displayProcesses[index], index, NULL); */
 }
 
 void print_list(void)
@@ -471,17 +529,23 @@ void print_list(void)
     g_numberOfDisplayItems = g_numberOfProcesses;
 
     int numberOfDisplayItems = 0;
-    for(int i = 0; i < g_numberOfProcesses; i++)
+
+    fzf_pattern_t *pattern = fzf_parse_pattern(CaseSmart, false, g_searchStirng, true);
+    if(strlen(g_searchStirng) > 0)
     {
-        if(strlen(g_searchStirng) > 0)
+        for(int i = 0; i < g_numberOfProcesses; i++)
         {
-            if(strstr(g_processes[i].name, g_searchStirng) != NULL)
+            int score = fzf_get_score(g_processes[i].name, pattern, slab);
+            if(score > 0)
             {
                 g_displayProcesses[numberOfDisplayItems] = &g_processes[i];
                 numberOfDisplayItems++;
             }
         }
-        else
+    }
+    else
+    {
+        for(int i = 0; i < g_numberOfProcesses; i++)
         {
             g_displayProcesses[numberOfDisplayItems] = &g_processes[i];
             numberOfDisplayItems++;
@@ -498,7 +562,7 @@ void print_list(void)
     box(window, 0, 0);
 
     g_nameWidth = y - (2) - (8 + 20 + 20 + 8 + 8 + 8 + 8) -(7);
-    wattron(window, A_BOLD);
+    wattron(window, A_BOLD | COLOR_PAIR(HEADER_TEXT_PAIR));
     mvwprintw(
             window,
             1,
@@ -513,12 +577,16 @@ void print_list(void)
             "Threads",
             "Reads",
             "Writes");
-    wattroff(window, A_BOLD);
+    wattroff(window, A_BOLD | COLOR_PAIR(HEADER_TEXT_PAIR));
 
     for(int i = 0; i < g_numberOfDisplayItems; i++)
     {
-        print_process(g_displayProcesses[i], i);
+        fzf_position_t *pos = fzf_get_positions(g_displayProcesses[i]->name, pattern, slab);
+        print_process(g_displayProcesses[i], i, pos);
+        fzf_free_positions(pos);
     }
+
+    fzf_free_pattern(pattern);
 
     wrefresh(window);
 }
@@ -588,7 +656,6 @@ void refreshsummary()
     statex.dwLength = sizeof (statex);
     GlobalMemoryStatusEx (&statex);
 
-    /* int x,y; */
     wclear(summaryWindow);
     int cpuPercent = get_cpu_usage();
     mvwprintw(
@@ -669,6 +736,8 @@ void reload()
 
 int main()
 {
+    slab = fzf_make_default_slab();
+
     sm_EnableTokenPrivilege(SE_DEBUG_NAME);
     g_processor_count_ = get_processor_number();
 
@@ -693,8 +762,20 @@ int main()
         exit(1);
     }
 
+    use_default_colors();
     start_color();
-    init_pair(1, COLOR_YELLOW, COLOR_GREEN);
+    init_color(255, 300, 280, 270);
+    init_color(244, 60, 56, 54);
+    init_color(233, 880, 880, 880);
+    init_color(222, 276, 532, 544);
+    init_color(211, 1000, 752, 188);
+
+    init_pair(NORMAL_UNSELECTED_TEXT_PAIR, -1, 0);
+    init_pair(NORMAL_SELECTED_TEXT_PAIR, -1, 255);
+    init_pair(FUZZYMATCH_UNSELECTED_TEXT, 222, 0);
+    init_pair(FUZZYMATCH_SELECTED_TEXT, 222, 255);
+    init_pair(HEADER_TEXT_PAIR, 211, 0);
+
     wtimeout(stdscr, 1000);
     keypad(stdscr, TRUE);
 
@@ -741,6 +822,12 @@ int main()
                     g_sortColumn = 5;
                     print_list();
                     break;
+                case CTRL('k'):
+                    if(g_selectedIndex > -1)
+                    {
+                        kill_process(g_displayProcesses[g_selectedIndex]);
+                    }
+                    break;
                 case CTRL('p'):
                     if(g_selectedIndex > 0)
                     {
@@ -766,7 +853,7 @@ int main()
                 case '\b':
                     int y1, x1;
                     getyx(searchWindow, y1, x1);
-                    if(x1 > 3)
+                    if(x1 > 3 && g_searchStringIndex > 0)
                     {
                         wmove(searchWindow, y1, x1 - 1);
                         waddch(searchWindow, ' ');
