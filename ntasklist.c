@@ -700,13 +700,12 @@ void refreshsummary()
             summaryWindow,
             1,
             2,
-            "CPU: %d %%  Memory: %d %%  Processes: %d  Cores: %d  Threads: %d mode: %s",
+            "CPU: %d %%  Memory: %d %%  Processes: %d  Cores: %d  Threads: %d",
             cpuPercent,
             statex.dwMemoryLoad,
             g_numberOfProcesses,
             g_processor_count_,
-            g_numberOfThreads,
-            modeBuff);
+            g_numberOfThreads);
     box(summaryWindow, 0, 0);
     wrefresh(summaryWindow);
 }
