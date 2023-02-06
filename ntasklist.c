@@ -886,12 +886,10 @@ int main()
                     break;
                 case 27:
                     g_mode = Normal;
+                    g_searchStirng[0] = '\0';
+                    g_searchStringIndex = 0;
                     reload();
                     break;
-                /* case '/': */
-                /*     g_mode = Search; */
-                /*     reload(); */
-                /*     break; */
                 case CTRL('y'):
                     if(g_scrollOffset > 0)
                     {
