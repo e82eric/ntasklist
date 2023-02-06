@@ -52,6 +52,12 @@ typedef struct ProcessSnapshot
     int numberOfThreads;
 } ProcessSnapshot;
 
+enum Mode
+{
+    Normal,
+    Search
+};
+
 WINDOW *window;
 WINDOW *headerWindow;
 WINDOW *summaryWindow;
@@ -79,6 +85,13 @@ int g_selectedIndex = 0;
 
 int g_nameWidth = 0;
 fzf_slab_t *slab;
+
+int g_scrollOffset = 0;
+
+enum Mode g_mode = Normal;
+
+int g_lastChar;
+ULONGLONG g_lastCharTime;
 
 void FormatNumber(CHAR *buf, size_t toFormat, NUMBERFMT* fmt)
 {
@@ -552,14 +565,26 @@ void print_list(void)
         }
     }
 
+    int offset = 0;
     g_numberOfDisplayItems = numberOfDisplayItems;
     if(g_numberOfDisplayItems > numberOfLines)
     {
+        offset = g_scrollOffset;
         g_numberOfDisplayItems = numberOfLines - 3;
     }
 
     wclear(window);
     box(window, 0, 0);
+
+    if(g_searchStringIndex > 0)
+    {
+        mvwprintw(
+                window,
+                0,
+                (y / 2) - (g_searchStringIndex / 2),
+                " </%s> ",
+                g_searchStirng);
+    }
 
     g_nameWidth = y - (2) - (8 + 20 + 20 + 8 + 8 + 8 + 8) -(7);
     wattron(window, A_BOLD | COLOR_PAIR(HEADER_TEXT_PAIR));
@@ -581,9 +606,12 @@ void print_list(void)
 
     for(int i = 0; i < g_numberOfDisplayItems; i++)
     {
-        fzf_position_t *pos = fzf_get_positions(g_displayProcesses[i]->name, pattern, slab);
-        print_process(g_displayProcesses[i], i, pos);
-        fzf_free_positions(pos);
+        if(i + offset < numberOfDisplayItems)
+        {
+            fzf_position_t *pos = fzf_get_positions(g_displayProcesses[i]->name, pattern, slab);
+            print_process(g_displayProcesses[i + offset], i, pos);
+            fzf_free_positions(pos);
+        }
     }
 
     fzf_free_pattern(pattern);
@@ -649,6 +677,16 @@ int get_cpu_usage(void)
 
 void refreshsummary()
 {
+    CHAR modeBuff[256];
+    if(g_mode == Normal)
+    {
+        strcpy(modeBuff, "Normal");
+    }
+    else if(g_mode == Search)
+    {
+        strcpy(modeBuff, "Search");
+    }
+
     int x1,y1;
     getmaxyx(stdscr, y1, x1);
 
@@ -662,23 +700,25 @@ void refreshsummary()
             summaryWindow,
             1,
             2,
-            "CPU: %d %%  Memory: %d %%  Processes: %d  Cores: %d  Threads: %d  x: %d, y: %d",
+            "CPU: %d %%  Memory: %d %%  Processes: %d  Cores: %d  Threads: %d mode: %s",
             cpuPercent,
             statex.dwMemoryLoad,
             g_numberOfProcesses,
             g_processor_count_,
             g_numberOfThreads,
-            x1,
-            y1);
+            modeBuff);
     box(summaryWindow, 0, 0);
     wrefresh(summaryWindow);
 }
 
 void create_search_window()
 {
-    searchWindow = newwin(3, COLS - 2, LINES - 3, 1);
-    box(searchWindow, 0, 0);
-    wrefresh(searchWindow);
+    if(g_mode == Search)
+    {
+        searchWindow = newwin(3, COLS - 2, LINES - 3, 1);
+        box(searchWindow, 0, 0);
+        wrefresh(searchWindow);
+    }
 }
 
 void paint_search_window()
@@ -706,6 +746,10 @@ void paint_summary_window()
 void create_process_list_window()
 {
     int numberOfLines = LINES - 6;
+    if(g_mode == Normal)
+    {
+        numberOfLines = LINES - 3;
+    }
     window = newwin(numberOfLines, COLS - 2, 3, 1);
     box(window, 0, 0);
 }
@@ -729,7 +773,11 @@ void reload()
     create_process_list_window();
     print_list();
 
-    delwin(searchWindow);
+    if(searchWindow)
+    {
+        delwin(searchWindow);
+        searchWindow = NULL;
+    }
     create_search_window();
     paint_search_window();
 }
@@ -802,6 +850,7 @@ int main()
         {
             switch(c)
             {
+                int maxScroll = g_numberOfProcesses - g_numberOfDisplayItems;
                 case KEY_F(1):
                     g_sortColumn = 1;
                     print_list();
@@ -827,6 +876,50 @@ int main()
                     {
                         kill_process(g_displayProcesses[g_selectedIndex]);
                     }
+                    break;
+                case CTRL('e'):
+                    if(g_scrollOffset < maxScroll)
+                    {
+                        g_scrollOffset++;
+                    }
+                    print_list();
+                    break;
+                case 27:
+                    g_mode = Normal;
+                    reload();
+                    break;
+                /* case '/': */
+                /*     g_mode = Search; */
+                /*     reload(); */
+                /*     break; */
+                case CTRL('y'):
+                    if(g_scrollOffset > 0)
+                    {
+                        g_scrollOffset--;
+                    }
+                    print_list();
+                    break;
+                case CTRL('d'):
+                    if((g_scrollOffset + g_numberOfDisplayItems) > g_numberOfProcesses)
+                    {
+                        /* g_scrollOffset = g_numberOfProcesses - g_numberOfProcesses; */
+                    }
+                    else
+                    {
+                        g_scrollOffset = g_scrollOffset + g_numberOfDisplayItems;
+                    }
+                    print_list();
+                    break;
+                case CTRL('u'):
+                    if(g_scrollOffset - g_numberOfDisplayItems < 0)
+                    {
+                        g_scrollOffset = 0;
+                    }
+                    else
+                    {
+                        g_scrollOffset = g_scrollOffset - g_numberOfDisplayItems;
+                    }
+                    print_list();
                     break;
                 case CTRL('p'):
                     if(g_selectedIndex > 0)
@@ -863,18 +956,52 @@ int main()
                         paint_search_window();
                     }
                     break;
-                case 'q':
-                    stop = TRUE;
-                    break;
                 case ERR:
                     break;
                 case KEY_RESIZE:
                     reload();
                     break;
                 default:
-                    g_searchStirng[g_searchStringIndex] = c;
-                    g_searchStringIndex++;
-                    paint_search_window();
+                    if(g_mode == Normal)
+                    {
+                        FILETIME nowFileTime;
+                        GetSystemTimeAsFileTime(&nowFileTime);
+                        ULONGLONG now = ConvertFileTimeToInt64(&nowFileTime);
+                        ULONGLONG nanoSecondsSinceLastChar = now - g_lastCharTime;
+
+                        if(c == '/')
+                        {
+                            g_mode = Search;
+                            reload();
+                        }
+                        else if(c == 'g')
+                        {
+                            if(g_lastChar == 'g' && nanoSecondsSinceLastChar < 10000000)
+                            {
+                                g_scrollOffset = 0;
+                                print_list();
+                            }
+                        }
+                        else if(c == 'G')
+                        {
+                            g_scrollOffset = g_numberOfProcesses - g_numberOfDisplayItems;
+                            print_list();
+                        }
+                        else if(c == 'q')
+                        {
+                            stop = TRUE;
+                        }
+                        g_lastChar = c;
+                        g_lastCharTime = now;
+                    }
+                    else
+                    {
+                        g_searchStirng[g_searchStringIndex] = c;
+                        g_searchStringIndex++;
+                        g_scrollOffset = 0;
+                        paint_search_window();
+                        print_list();
+                    }
 
                     break;
             }
