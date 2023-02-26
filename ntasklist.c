@@ -19,6 +19,16 @@
 
 NUMBERFMT numFmt = { 0 };
 
+typedef struct CpuReading CpuReading;
+struct CpuReading
+{
+    int value;
+    ULONGLONG idle;
+    ULONGLONG krnl;
+    ULONGLONG usr;
+    CpuReading *next;
+};
+
 typedef struct ProcessTime
 {
     DWORD pid;
@@ -58,10 +68,23 @@ enum Mode
     Search
 };
 
+static HANDLE StatRefreshThread;
+static CRITICAL_SECTION SyncLock;
+
 WINDOW *window;
 WINDOW *headerWindow;
 WINDOW *summaryWindow;
 WINDOW *searchWindow;
+WINDOW *graphWindow;
+
+int g_graphWindowLines = 10;
+
+int NUMBER_OF_CPU_READINGS;
+
+CpuReading *g_cpuReadings2;
+CpuReading *g_lastCpuReading;
+/* int g_cpuReadings[NUMBER_OF_CPU_READINGS]; */
+int g_cpuReadingIndex = 0;
 
 Process g_processes[1024];
 Process *g_displayProcesses[1024];
@@ -632,6 +655,44 @@ void refresh_processes(void)
     g_lastTimeOfProcessListRefresh = ConvertFileTimeToInt64(&now);
 }
 
+void fill_cpu_usage(CpuReading *toFill, CpuReading *lastReading)
+{
+    FILETIME ftIdle, ftKrnl, ftUsr;
+    if(GetSystemTimes(&ftIdle, &ftKrnl, &ftUsr))
+    {
+        ULONGLONG uIdle = ((ULONGLONG)ftIdle.dwHighDateTime << 32) | ftIdle.dwLowDateTime;
+        ULONGLONG uKrnl = ((ULONGLONG)ftKrnl.dwHighDateTime << 32) | ftKrnl.dwLowDateTime;
+        ULONGLONG uUsr = ((ULONGLONG)ftUsr.dwHighDateTime << 32) | ftUsr.dwLowDateTime;
+
+        toFill->idle = uIdle;
+        toFill->krnl = uKrnl;
+        toFill->usr = uUsr;
+
+        if(lastReading)
+        {
+            ULONGLONG uOldIdle = lastReading->idle;
+            ULONGLONG uOldKrnl = lastReading->krnl;
+            ULONGLONG uOldUsr = lastReading->usr;
+
+            ULONGLONG uDiffIdle = uIdle - uOldIdle;
+            ULONGLONG uDiffKrnl = uKrnl - uOldKrnl;
+            ULONGLONG uDiffUsr = uUsr - uOldUsr;
+
+            int nRes = 0;
+            if(uDiffKrnl + uDiffUsr)
+            {
+                nRes = (int)((uDiffKrnl + uDiffUsr - uDiffIdle) * 100 / (uDiffKrnl + uDiffUsr));
+            }
+
+            toFill->value = nRes;
+        }
+        else
+        {
+            toFill->value = 0;
+        }
+    }
+}
+
 int get_cpu_usage(void)
 {
     static int previousResult;
@@ -675,6 +736,30 @@ int get_cpu_usage(void)
     return nRes;
 }
 
+void fill_size_in_units(CHAR *toFill, int maxLen, ULONGLONG inBytes)
+{
+    CHAR suffix[5][3] = { "B", "KB", "MB", "GB", "TB" };
+    ULONGLONG bytes = inBytes;
+
+    for(int i = 0; i < 5; i++)
+    {
+        ULONGLONG newBytes = bytes / 1024;
+        if(newBytes > 0)
+        {
+            bytes = newBytes;
+        }
+        else
+        {
+            sprintf_s(
+                    toFill,
+                    maxLen,
+                    "%I64u %s",
+                    bytes,
+                    suffix[i - 1]);
+        }
+    }
+}
+
 void refreshsummary()
 {
     CHAR modeBuff[256];
@@ -694,15 +779,28 @@ void refreshsummary()
     statex.dwLength = sizeof (statex);
     GlobalMemoryStatusEx (&statex);
 
+    CHAR totalMemoryInUnits[MAX_PATH];
+    fill_size_in_units(totalMemoryInUnits, MAX_PATH, statex.ullTotalPhys);
+
+    CHAR availableMemoryInUnits[MAX_PATH];
+    fill_size_in_units(availableMemoryInUnits, MAX_PATH, statex.ullAvailPhys);
+
     wclear(summaryWindow);
-    int cpuPercent = get_cpu_usage();
+    int cpuPercent = 0;
+    if(g_lastCpuReading)
+    {
+        cpuPercent = g_lastCpuReading->value;
+    }
+
     mvwprintw(
             summaryWindow,
             1,
             2,
-            "CPU: %d %%  Memory: %d %%  Processes: %d  Cores: %d  Threads: %d",
+            "CPU: %d %%  Memory: %d %% (Total: %s, Avail: %s), Processes: %d, Cores: %d, Threads: %d",
             cpuPercent,
             statex.dwMemoryLoad,
+            totalMemoryInUnits,
+            availableMemoryInUnits,
             g_numberOfProcesses,
             g_processor_count_,
             g_numberOfThreads);
@@ -735,26 +833,88 @@ void paint_search_window()
     wrefresh(searchWindow);
 }
 
+void paint_graph_column(int readingNumber, int value)
+{
+    int numberOfFullNumbers = value / 10;
+    for(int i = 0; i < numberOfFullNumbers; i++)
+    {
+        int row = g_graphWindowLines - i - 2;
+        mvwaddch(graphWindow, row, readingNumber + 1, '|');
+    }
+
+    int remainder = value % 10;
+    if(remainder == 0)
+    {
+        return;
+    }
+    else if(remainder < 5)
+    {
+        int row = g_graphWindowLines - numberOfFullNumbers - 2;
+        mvwaddch(graphWindow, row, readingNumber + 1, '.');
+    }
+    else
+    {
+        int row = g_graphWindowLines - numberOfFullNumbers - 2;
+        mvwaddch(graphWindow, row, readingNumber + 1, ':');
+    }
+}
+
+void create_graph_window()
+{
+    graphWindow = newwin(g_graphWindowLines, COLS - 2, 0, 1);
+    box(graphWindow, 0, 0);
+    wrefresh(graphWindow);
+}
+
+void paint_graph_window()
+{
+    int readingIndex = 0;
+
+    int x,y;
+    getmaxyx(graphWindow, x, y);
+    mvwprintw(
+            graphWindow,
+            0,
+            (y / 2),
+            " %s ",
+            "CPU %");
+
+    CpuReading *currentReading = g_cpuReadings2;
+    while(currentReading)
+    {
+        paint_graph_column(readingIndex, currentReading->value);
+        currentReading = currentReading->next;
+        readingIndex++;
+    }
+
+    /* wrefresh(graphWindow); */
+}
+
+void create_summary_window(void)
+{
+    summaryWindow = newwin(3, COLS - 2, 0 + g_graphWindowLines, 1);
+    box(summaryWindow, 0, 0);
+}
+
 void paint_summary_window()
 {
-    summaryWindow = newwin(3, COLS - 2, 0, 1);
-    box(summaryWindow, 0, 0);
     refreshsummary();
 }
 
 void create_process_list_window()
 {
-    int numberOfLines = LINES - 6;
-    if(g_mode == Normal)
+    int numberOfLines = LINES - 3 - g_graphWindowLines;
+    if(g_mode == Search)
     {
-        numberOfLines = LINES - 3;
+        numberOfLines = LINES - 6;
     }
-    window = newwin(numberOfLines, COLS - 2, 3, 1);
+    window = newwin(numberOfLines, COLS - 2, 3 + g_graphWindowLines, 1);
     box(window, 0, 0);
 }
 
 void reload()
 {
+    NUMBER_OF_CPU_READINGS = COLS - 4;
     resize_term(0, 0);
     wclear(stdscr);
     wclear(searchWindow);
@@ -764,7 +924,13 @@ void reload()
 
     refresh();
 
+    delwin(graphWindow);
+    create_graph_window();
+    paint_graph_window();
+    refresh();
+
     delwin(summaryWindow);
+    create_summary_window();
     paint_summary_window();
     refreshsummary();
 
@@ -781,8 +947,62 @@ void reload()
     paint_search_window();
 }
 
+void add_cpu_reading(void)
+{
+    if(!g_cpuReadings2)
+    {
+        g_cpuReadings2 = calloc(1, sizeof(CpuReading));
+        fill_cpu_usage(g_cpuReadings2, NULL);
+        g_lastCpuReading = g_cpuReadings2;
+        g_cpuReadingIndex = 1;
+    }
+    else
+    {
+        CpuReading *cpuReading = calloc(1, sizeof(CpuReading));
+        fill_cpu_usage(cpuReading, g_lastCpuReading);
+        g_lastCpuReading->next = cpuReading;
+        g_lastCpuReading = cpuReading;
+
+        if(g_cpuReadingIndex >= NUMBER_OF_CPU_READINGS - 1)
+        {
+            CpuReading *firstReading = g_cpuReadings2;
+            g_cpuReadings2 = firstReading->next;
+            free(firstReading);
+        }
+        else
+        {
+            g_cpuReadingIndex++;
+        }
+    }
+}
+
+DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
+{
+    UNREFERENCED_PARAMETER(lpParam);
+
+    while(1)
+    {
+        EnterCriticalSection(&SyncLock);
+        if(g_cpuReadingIndex < NUMBER_OF_CPU_READINGS)
+        {
+            int cpu = get_cpu_usage();
+            add_cpu_reading();
+            paint_graph_window();
+            refreshsummary();
+            refresh_processes();
+            wrefresh(window);
+        }
+        LeaveCriticalSection(&SyncLock);
+
+        Sleep(1000);
+    }
+
+    return 0;
+}
+
 int main()
 {
+    InitializeCriticalSection(&SyncLock);
     slab = fzf_make_default_slab();
 
     sm_EnableTokenPrivilege(SE_DEBUG_NAME);
@@ -802,6 +1022,7 @@ int main()
     curs_set(0);
     timeout(1000);
     nonl();
+    NUMBER_OF_CPU_READINGS = COLS - 4;
 
     if (has_colors() == FALSE) {
         endwin();
@@ -828,25 +1049,38 @@ int main()
 
     refresh();
 
-    paint_summary_window();
+    /* paint_summary_window(); */
+    create_graph_window();
+    create_summary_window();
     create_search_window();
     create_process_list_window();
 
-    paint_search_window();
-    refresh_processes();
-    refreshsummary();
+    /* paint_search_window(); */
+    /* paint_graph_window(); */
+    /* refresh_processes(); */
+    /* refreshsummary(); */
 
     BOOL stop = FALSE;
 
     int c;
     curs_set(0);
 
+    StatRefreshThread = CreateThread(0, 0, StatRefreshThreadProc, 0, 0, 0);
+
     while(!stop)
     {
         c = wgetch(stdscr);
 
+/*         if(g_cpuReadingIndex < NUMBER_OF_CPU_READINGS) */
+/*         { */
+/*             int cpu = get_cpu_usage(); */
+/*             add_cpu_reading(); */
+/*             paint_graph_window(); */
+/*         } */
+
         if(c != ERR)
         {
+            EnterCriticalSection(&SyncLock);
             switch(c)
             {
                 int maxScroll = g_numberOfProcesses - g_numberOfDisplayItems;
@@ -1002,20 +1236,22 @@ int main()
 
                     break;
             }
+
+            /* wrefresh(window); */
+            LeaveCriticalSection(&SyncLock);
         }
 
-        FILETIME nowFileTime;
-        GetSystemTimeAsFileTime(&nowFileTime);
-        ULONGLONG now = ConvertFileTimeToInt64(&nowFileTime);
-        ULONGLONG nanoSecondsSinceLastRefresh = now - g_lastTimeOfProcessListRefresh;
+        /* FILETIME nowFileTime; */
+        /* GetSystemTimeAsFileTime(&nowFileTime); */
+        /* ULONGLONG now = ConvertFileTimeToInt64(&nowFileTime); */
+        /* ULONGLONG nanoSecondsSinceLastRefresh = now - g_lastTimeOfProcessListRefresh; */
 
-        if(nanoSecondsSinceLastRefresh > 10000000)
-        {
-            refreshsummary();
-            refresh_processes();
-        }
+        /* if(nanoSecondsSinceLastRefresh > 10000000) */
+        /* { */
+        /*     /1* refreshsummary(); *1/ */
+        /*     /1* refresh_processes(); *1/ */
+        /* } */
 
-        wrefresh(window);
     }
     endwin();
 
