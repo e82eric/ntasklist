@@ -10,7 +10,10 @@
 #include <math.h>
 #include <shlwapi.h>
 #include <strsafe.h>
+#include <Pdh.h>
 #include "fzf\\fzf.h"
+
+#pragma comment(lib, "pdh.lib")
 
 #define FOREGROUND_WHITE (FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE)
 #define FOREGROUND_CYAN (FOREGROUND_GREEN)
@@ -32,6 +35,17 @@ HANDLE ConsoleHandle;
 static HANDLE OldConsoleHandle;
 static WORD CurrentColor;
 
+typedef struct Drive Drive;
+struct Drive
+{
+    CHAR *longPath;
+    unsigned __int64 lastSystemTime;
+    __int64 lastBytesRead;
+    __int64 lastBytesWritten;
+    float readsPerSecond;
+    float writesPerSecond;
+};
+
 typedef struct CpuReading CpuReading;
 struct CpuReading
 {
@@ -40,6 +54,14 @@ struct CpuReading
     ULONGLONG krnl;
     ULONGLONG usr;
     CpuReading *next;
+};
+
+typedef struct IoReading IoReading;
+struct IoReading
+{
+    float readsPerSecond;
+    float writesPerSecond;
+    IoReading *next;
 };
 
 typedef struct ProcessTime
@@ -70,6 +92,9 @@ typedef struct Process
     unsigned __int64 upTime;
     unsigned __int64 cpuSystemTime;
     unsigned __int64 cpuProcessTime;
+    /* unsigned __int64 cpuKernelTime; */
+    FILETIME cpuKernelTime;
+    unsigned __int64 cpuUserTime;
     unsigned __int64 ioSystemTime;
     unsigned __int64 ioReads;
     unsigned __int64 ioWrites;
@@ -84,7 +109,9 @@ typedef struct ProcessSnapshot
 enum Mode
 {
     Normal,
-    Search
+    Search,
+    Help,
+    ProcessDetails
 };
 
 fzf_slab_t *slab;
@@ -92,10 +119,13 @@ fzf_slab_t *slab;
 static CRITICAL_SECTION SyncLock;
 static HANDLE StatRefreshThread;
 int NUMBER_OF_CPU_READINGS;
+int NUMBER_OF_IO_READINGS;
 enum Mode g_mode = Normal;
 ULONGLONG g_upTime;
 CpuReading *g_cpuReadings;
 CpuReading *g_lastCpuReading;
+int g_MaxCpuPercent;
+
 int g_cpuReadingIndex = 0;
 int g_numberOfProcesses = 0;
 int g_processor_count_ = 0;
@@ -103,6 +133,15 @@ int g_numberOfThreads = 0;
 Process g_processes[1024];
 int g_sortColumn = 5;
 SHORT g_selectedIndex = 0;
+DWORD g_focusedProcessPid;
+
+IoReading *g_ioReadings;
+IoReading *g_lastIoReading;
+int g_ioReadingIndex;
+int g_largestIoReading;
+
+int g_numberOfDrives;
+Drive g_drives[MAX_PATH];
 
 char g_searchString[1024];
 SHORT g_searchStringIndex = 0;
@@ -138,6 +177,17 @@ SHORT g_cpu_graph_left;
 SHORT g_cpu_graph_right;
 SHORT g_cpu_graph_axis_left;
 
+SHORT g_io_graph_border_top;
+SHORT g_io_graph_border_bottom;
+SHORT g_io_graph_border_left;
+SHORT g_io_graph_border_right;
+
+SHORT g_io_graph_top;
+SHORT g_io_graph_bottom;
+SHORT g_io_graph_left;
+SHORT g_io_graph_right;
+SHORT g_io_graph_axis_left;
+
 SHORT g_search_view_border_top;
 SHORT g_search_view_border_bottom;
 SHORT g_search_view_border_left;
@@ -165,6 +215,9 @@ SHORT g_processes_view_x = 4;
 SHORT g_processes_view_y = 2;
 SHORT g_processes_view_number_of_display_lines;
 
+RECT g_help_view_border_rect;
+RECT g_help_view_rect;
+
 int g_nameWidth = 0;
 
 Process *g_displayProcesses[1024];
@@ -182,6 +235,46 @@ int g_scrollOffset = 0;
 #define NORETURN
 #endif
 
+BOOL sm_EnableTokenPrivilege(LPCTSTR pszPrivilege)
+{
+    HANDLE hToken = 0;
+    TOKEN_PRIVILEGES tkp = {0}; 
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+    {
+        return FALSE;
+    }
+
+    if(LookupPrivilegeValue(NULL, pszPrivilege, &tkp.Privileges[0].Luid)) 
+    {
+        tkp.PrivilegeCount = 1;
+        tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+        AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, (PTOKEN_PRIVILEGES)NULL, 0); 
+
+        if (GetLastError() != ERROR_SUCCESS)
+        {
+            return FALSE;
+        }
+
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+void FormatNumber(CHAR *buf, size_t toFormat, NUMBERFMT* fmt)
+{
+    CHAR numStr[MAX_PATH];
+    _snprintf_s(numStr, MAX_PATH, 15, "%zu", toFormat);
+    GetNumberFormatA(LOCALE_USER_DEFAULT,
+            0,
+            numStr,
+            fmt,
+            buf,
+            MAX_PATH);
+}
+
 NORETURN void Die(TCHAR *Fmt, ...)
 {
     TCHAR Buffer[1024];
@@ -197,8 +290,113 @@ NORETURN void Die(TCHAR *Fmt, ...)
     exit(EXIT_FAILURE);
 }
 
-static int ConPrintf(TCHAR *Fmt, ...)
+static void SetConCursorPos(SHORT X, SHORT Y)
 {
+    COORD Coord;
+    Coord.X = X;
+    Coord.Y = Y;
+    SetConsoleCursorPosition(ConsoleHandle, Coord);
+}
+
+static void ConPutc(char c)
+{
+    DWORD Dummy;
+    WriteConsole(ConsoleHandle, &c, 1, &Dummy, 0);
+}
+
+BOOL is_inside_vertical_of_rect(COORD *coord, RECT *rect)
+{
+    if(coord->Y >= rect->top)
+    {
+        if(coord->Y <= rect->bottom)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+BOOL is_inside_rect(COORD *coord, RECT *rect)
+{
+    if(is_inside_vertical_of_rect(coord, rect))
+    {
+        if(coord->X >= rect->left)
+        {
+            if(coord->X <= rect->right)
+            {
+                return TRUE;
+            }
+        }
+    }
+
+    return FALSE;
+}
+
+void draw_box(SHORT top, SHORT bottom, SHORT left, SHORT width)
+{
+    //218 ┌
+    //191 ┐
+    //179 │
+    //192 └
+    //217 ┘
+
+    SetConCursorPos(left, top);
+    ConPutc(218);
+    for(int i = 1; i < width - 1; i++)
+    {
+        ConPutc(196);
+    }
+
+    ConPutc(191);
+    for(SHORT i = 1; i < bottom - top + 1; i++)
+    {
+        SetConCursorPos(left, i + top);
+        ConPutc(179);
+        SetConCursorPos(left + width - 1, i + top);
+        ConPutc(179);
+    }
+    SetConCursorPos(left, bottom);
+    ConPutc(192);
+
+    for(int i = 1; i < width - 1; i++)
+    {
+        ConPutc(196);
+    }
+    ConPutc(217);
+}
+
+void draw_rect(RECT *rect)
+{
+    draw_box((SHORT)rect->top, (SHORT)rect->bottom, (SHORT)rect->left, (SHORT)rect->right - (SHORT)rect->left);
+}
+
+void clear_rect(RECT *rect)
+{
+    DWORD cCharsWritten;
+    SHORT numberOfLines = (SHORT)rect->bottom - (SHORT)rect->top + 1;
+    SHORT width = (SHORT)rect->right - (SHORT)rect->left;
+    for(SHORT i = 0; i < numberOfLines; i++)
+    {
+        COORD coordScreen = { (SHORT)rect->left, (SHORT)rect->top + i };
+        FillConsoleOutputAttribute(ConsoleHandle,
+                FOREGROUND_INTENSITY,
+                width,
+                coordScreen,
+                &cCharsWritten);
+        FillConsoleOutputCharacter(ConsoleHandle,
+                (TCHAR)' ',
+                width,
+                coordScreen,
+                &cCharsWritten);
+    }
+}
+
+static int DialogConPrintf(TCHAR *Fmt, ...)
+{
+    CONSOLE_SCREEN_BUFFER_INFO cbsi;
+    GetConsoleScreenBufferInfo(ConsoleHandle, &cbsi);
+
     TCHAR Buffer[1024];
     va_list VaList;
 
@@ -208,14 +406,55 @@ static int ConPrintf(TCHAR *Fmt, ...)
 
     DWORD Dummy;
     WriteConsole(ConsoleHandle, Buffer, CharsWritten, &Dummy, 0);
-
     return CharsWritten;
 }
 
-static void ConPutc(char c)
+static int ConPrintf(TCHAR *Fmt, ...)
 {
-    DWORD Dummy;
-    WriteConsole(ConsoleHandle, &c, 1, &Dummy, 0);
+    CONSOLE_SCREEN_BUFFER_INFO cbsi;
+    GetConsoleScreenBufferInfo(ConsoleHandle, &cbsi);
+
+    TCHAR Buffer[1024];
+    va_list VaList;
+
+    va_start(VaList, Fmt);
+    int CharsWritten = _vstprintf_s(Buffer, _countof(Buffer), Fmt, VaList);
+    va_end(VaList);
+
+    if((g_mode != Help && g_mode != ProcessDetails) || !is_inside_vertical_of_rect(&cbsi.dwCursorPosition, &g_help_view_border_rect))
+    {
+        DWORD Dummy;
+        WriteConsole(ConsoleHandle, Buffer, CharsWritten, &Dummy, 0);
+        return CharsWritten;
+    }
+    else
+    {
+        int charsWrittenRight = cbsi.dwCursorPosition.X + CharsWritten;
+        int maxX = g_help_view_border_rect.right;
+        if(charsWrittenRight > maxX)
+        {
+            maxX = charsWrittenRight;
+        }
+
+        int maxLeft = g_help_view_border_rect.left - cbsi.dwCursorPosition.X;
+        int beforeLeft = CharsWritten;
+        if(CharsWritten > maxLeft)
+        {
+            beforeLeft = maxLeft;
+        }
+        DWORD Dummy;
+        WriteConsole(ConsoleHandle, Buffer, beforeLeft, &Dummy, 0);
+
+        if(charsWrittenRight > g_help_view_border_rect.right)
+        {
+            int charsToWrite = maxX - g_help_view_border_rect.right;
+            int startChar = CharsWritten - charsToWrite;
+            SetConCursorPos(g_help_view_border_rect.right, cbsi.dwCursorPosition.Y);
+            WriteConsole(ConsoleHandle, Buffer + startChar, charsToWrite, &Dummy, 0);
+        }
+
+        return 0;
+    }
 }
 
 static void ConPutcW(wchar_t c)
@@ -229,14 +468,6 @@ static void SetColor(WORD Color)
     Color;
     CurrentColor = Color;
     SetConsoleTextAttribute(ConsoleHandle, Color);
-}
-
-static void SetConCursorPos(SHORT X, SHORT Y)
-{
-    COORD Coord;
-    Coord.X = X;
-    Coord.Y = Y;
-    SetConsoleCursorPosition(ConsoleHandle, Coord);
 }
 
 static void RestoreConsole(void)
@@ -270,6 +501,31 @@ ProcessTime *find_process_time_by_pid(DWORD pid)
     }
 
     return NULL;
+}
+
+BOOL FileTimeToString(const FILETIME* pFileTime, LPSTR lpString, int cchString)
+{
+    ULARGE_INTEGER largeInteger;
+    largeInteger.LowPart = pFileTime->dwLowDateTime;
+    largeInteger.HighPart = pFileTime->dwHighDateTime;
+
+    ULONGLONG ticks = largeInteger.QuadPart; // Convert to 100-nanosecond intervals
+    ULONGLONG seconds = ticks / 10000000; // Convert to seconds
+    ULONGLONG minutes = seconds / 60;
+    ULONGLONG hours = minutes / 60;
+    ULONGLONG days = hours / 24;
+
+    // Calculate remaining time values
+    ULONGLONG remainingHours = hours % 24;
+    ULONGLONG remainingMinutes = minutes % 60;
+    ULONGLONG remainingSeconds = seconds % 60;
+
+    // Format the result string
+    /* int result = sprintf_s(lpString, cchString, "%llu days, %llu hours, %llu minutes, %llu seconds", days, remainingHours, remainingMinutes, remainingSeconds); */
+    wsprintf(lpString, _T("%02d:%02d:%02d:%02d"), days, remainingHours, remainingMinutes, remainingSeconds);
+
+    return 0;
+    /* return (result > 0); */
 }
 
 void format_time(TCHAR *toFill, ULONGLONG value)
@@ -363,6 +619,42 @@ static int get_processor_number()
     return (int)info.dwNumberOfProcessors;
 }
 
+void add_io_reading(float reads, float writes)
+{
+    if(!g_ioReadings)
+    {
+        g_ioReadings = calloc(1, sizeof(IoReading));
+        g_ioReadings->readsPerSecond = reads;
+        g_ioReadings->writesPerSecond = writes;
+        g_lastIoReading = g_ioReadings;
+        g_cpuReadingIndex = 1;
+    }
+    else
+    {
+        IoReading *ioReading = calloc(1, sizeof(IoReading));
+        ioReading->readsPerSecond = reads;
+        ioReading->writesPerSecond = writes;
+        g_lastIoReading->next = ioReading;
+        g_lastIoReading = ioReading;
+
+        if(g_ioReadingIndex >= NUMBER_OF_IO_READINGS - 1)
+        {
+            IoReading *firstReading = g_ioReadings;
+            g_ioReadings = firstReading->next;
+            free(firstReading);
+        }
+        else
+        {
+            g_ioReadingIndex++;
+        }
+    }
+
+    if(reads > g_largestIoReading)
+    {
+        g_largestIoReading = reads;
+    }
+}
+
 void add_cpu_reading(void)
 {
     if(!g_cpuReadings)
@@ -394,10 +686,30 @@ void add_cpu_reading(void)
 
 void point_graph_axis_markers(void)
 {
+    SetConCursorPos(g_cpu_graph_axis_left, g_cpu_graph_top);
+    ConPrintf("(y) %s  (max) %d %%", "100%", g_MaxCpuPercent);
+
     for(SHORT i = 0; i < 10; i++)
     {
         SetConCursorPos(g_cpu_graph_axis_left, g_cpu_graph_bottom - i);
         /* ConPutc(196); */
+        ConPutc('_');
+    }
+}
+
+void point_graph_axis_markers2(SHORT areaLeft, SHORT areaBottom)
+{
+    CHAR ioAxisStr[MAX_PATH];
+    FormatNumber(ioAxisStr, g_largestIoReading + 1000, &g_numFmt);
+    SetConCursorPos(g_io_graph_axis_left, g_io_graph_top);
+
+    CHAR maxStr[MAX_PATH];
+    FormatNumber(maxStr, g_largestIoReading, &g_numFmt);
+    ConPrintf("(y) %s  (max) %s", ioAxisStr, maxStr);
+
+    for(SHORT i = 0; i < 10; i++)
+    {
+        SetConCursorPos(areaLeft, areaBottom - i);
         ConPutc('_');
     }
 }
@@ -451,8 +763,59 @@ void paint_graph_column(SHORT readingNumber, SHORT value)
 
 }
 
+void paint_graph_column2(SHORT areaLeft, SHORT areaBottom, SHORT readingNumber, SHORT value)
+{
+    SetColor(FOREGROUND_INTENSITY);
+    WCHAR lowerEigth = { 0x2581 };
+    WCHAR lowerQuarter = { 0x2582 };
+    WCHAR lowerHalf = { 0x2583 };
+    WCHAR fullBar = { 0x2588 };
+    SHORT numberOfFullNumbers = value / 10;
+    for(SHORT i = 0; i < 10; i++)
+    {
+        SetConCursorPos(areaLeft + readingNumber, areaBottom - i);
+        if(i == numberOfFullNumbers)
+        {
+            int remainder = value % 10;
+            if(remainder == 0)
+            {
+                ConPutc(' ');
+            }
+            else if(remainder <= 2)
+            {
+                ConPutcW(lowerEigth);
+            }
+            else if(remainder < 5)
+            {
+                ConPutcW(lowerQuarter);
+            }
+            else if(remainder >= 5)
+            {
+                ConPutcW(lowerHalf);
+            }
+        }
+        else if(i > numberOfFullNumbers)
+        {
+            ConPutc(' ');
+        }
+        else
+        {
+            ConPutcW(fullBar);
+        }
+    }
+
+}
+
 void paint_graph_window()
 {
+    SHORT width = g_cpu_graph_border_right - g_cpu_graph_border_left;
+    SHORT middle = width / 2;
+    SHORT middleOfHeader = strlen(" CPU ") / 2;
+    SHORT headerLeft = middle - middleOfHeader;
+
+    SetConCursorPos(g_cpu_graph_border_left + headerLeft, g_cpu_graph_border_top);
+    ConPrintf(" %s ", "CPU");
+
     point_graph_axis_markers();
     SHORT readingIndex = 0;
 
@@ -460,6 +823,29 @@ void paint_graph_window()
     while(currentReading)
     {
         paint_graph_column(readingIndex, currentReading->value);
+        currentReading = currentReading->next;
+        readingIndex++;
+    }
+}
+
+void paint_graph_window2()
+{
+    SHORT width = g_cpu_graph_border_right - g_cpu_graph_border_left;
+    SHORT middle = width / 2;
+    SHORT middleOfHeader = strlen(" IO ") / 2;
+    SHORT headerLeft = middle - middleOfHeader;
+
+    SetConCursorPos(g_io_graph_border_left + headerLeft, g_io_graph_border_top);
+    ConPrintf(" %s ", "IO");
+
+    point_graph_axis_markers2(g_io_graph_left, g_io_graph_bottom);
+    SHORT readingIndex = 0;
+
+    IoReading *currentReading = g_ioReadings;
+    while(currentReading)
+    {
+        float value = (currentReading->readsPerSecond / (g_largestIoReading + 1000)) * 100;
+        paint_graph_column2(g_io_graph_left + 1, g_io_graph_bottom, readingIndex, value);
         currentReading = currentReading->next;
         readingIndex++;
     }
@@ -495,9 +881,14 @@ void refreshsummary()
         cpuPercent = g_lastCpuReading->value;
     }
 
+    if(cpuPercent > g_MaxCpuPercent)
+    {
+        g_MaxCpuPercent = cpuPercent;
+    }
+
     TCHAR upTimeStr[MAX_PATH];
     format_time(upTimeStr, g_upTime);
-    
+
     TCHAR cpuStr[MAX_PATH];
     sprintf_s(
             cpuStr,
@@ -559,6 +950,21 @@ void refreshsummary()
             "%-12s %13s",
             "Up Time:",
             upTimeStr);
+
+    if(g_lastIoReading)
+    {
+        SetConCursorPos(g_summary_view_left, g_summary_view_top + 8);
+        ConPrintf(
+                "%-12s %13.1f",
+                "IO Reads:",
+                g_lastIoReading->readsPerSecond);
+
+        SetConCursorPos(g_summary_view_left, g_summary_view_top + 9);
+        ConPrintf(
+                "%-12s %13.1f",
+                "IO Writes:",
+                g_lastIoReading->writesPerSecond);
+    }
 }
 
 unsigned __int64 ConvertFileTimeToInt64(FILETIME *fileTime)
@@ -569,6 +975,96 @@ unsigned __int64 ConvertFileTimeToInt64(FILETIME *fileTime)
     result.HighPart = fileTime->dwHighDateTime;
 
     return result.QuadPart;
+}
+
+void populate_drives(void)
+{
+    char buffer[MAX_PATH];
+    DWORD length = GetLogicalDriveStringsA(sizeof(buffer) - 1, buffer);
+    if (length == 0) {
+        printf("Error getting drive strings.\n");
+        return 1;
+    }
+
+    char* p = buffer;
+    int counter = 0;
+    while (*p != '\0')
+    {
+        char longDriveName[MAX_PATH];
+        sprintf(
+                longDriveName,
+                "\\\\.\\%s",
+                p);
+        int size = strlen(longDriveName);
+        longDriveName[size - 1] = '\0';
+        g_drives[counter].longPath = StrDupA(longDriveName);
+        counter++;
+        p += strlen(p) + 1;
+    }
+
+    g_numberOfDrives = counter;
+}
+
+void populate_drive_io(void)
+{
+    for(int i = 0; i < 1; i++)
+    {
+        Drive drive = g_drives[i];
+        HANDLE dev = CreateFile(
+                g_drives[i].longPath,
+                FILE_READ_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                NULL,
+                OPEN_EXISTING,
+                0,
+                NULL);
+
+        if (dev == INVALID_HANDLE_VALUE)
+        {
+            return;
+        }
+
+        FILETIME now;
+        GetSystemTimeAsFileTime(&now);
+        unsigned __int64 systemTime = ConvertFileTimeToInt64(&now);
+
+        DISK_PERFORMANCE disk_info;
+        DWORD bytes;
+        if (!DeviceIoControl(
+                    dev,
+                    IOCTL_DISK_PERFORMANCE,
+                    NULL,
+                    0,
+                    &disk_info,
+                    sizeof(disk_info),
+                    &bytes,
+                    NULL))
+        {
+            CloseHandle(dev);
+            return;
+        }
+
+        CloseHandle(dev);
+
+        if(g_drives[i].lastBytesRead)
+        {
+            __int64 readDiff = disk_info.BytesRead.QuadPart - g_drives[i].lastBytesRead;
+            __int64 writeDiff = disk_info.BytesWritten.QuadPart - g_drives[i].lastBytesWritten;
+            __int64 timeDiff = systemTime - g_drives[i].lastSystemTime;
+
+            float numberOfSecondsBetweenReadings = (float)timeDiff / (float)10000000;
+
+            float readsPerSecond = readDiff / numberOfSecondsBetweenReadings;
+            float writesPerSecond = writeDiff / numberOfSecondsBetweenReadings;
+
+            g_drives[i].readsPerSecond = readsPerSecond / 1024;
+            g_drives[i].writesPerSecond = writesPerSecond / 1024;
+        }
+
+        g_drives[i].lastBytesRead = disk_info.BytesRead.QuadPart;
+        g_drives[i].lastBytesWritten = disk_info.BytesWritten.QuadPart;
+        g_drives[i].lastSystemTime = systemTime;
+    }
 }
 
 BOOL populate_process_io(Process *process, ProcessIo *lastProcessIo, HANDLE processHandle)
@@ -650,6 +1146,8 @@ BOOL populate_process_cpu_usage(Process *process, ProcessTime *lastProcessTime, 
 
     process->cpuSystemTime = systemTotalTime;
     process->cpuProcessTime = processTotalTime;
+    process->cpuUserTime = processUserTime;
+    process->cpuKernelTime = kernel_time;
 
     if(systemTimeDifference == 0)
     {
@@ -673,18 +1171,6 @@ void populate_process_from_pid(Process *process, HANDLE hProcess)
     GetProcessMemoryInfo(hProcess, (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
     process->privateBytes = pmc.PrivateUsage / 1024;
     process->workingSet = pmc.WorkingSetSize / 1024;
-}
-
-void FormatNumber(CHAR *buf, size_t toFormat, NUMBERFMT* fmt)
-{
-    CHAR numStr[MAX_PATH];
-    _snprintf_s(numStr, MAX_PATH, 15, "%zu", toFormat);
-    GetNumberFormatA(LOCALE_USER_DEFAULT,
-            0,
-            numStr,
-            fmt,
-            buf,
-            MAX_PATH);
 }
 
 int CompareProcessForSort(const void *a, const void *b)
@@ -724,6 +1210,21 @@ int CompareProcessForSort(const void *a, const void *b)
     return 0;
 }
 
+void populate_focused_process(Process *process)
+{
+    process->pid = g_focusedProcessPid;
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, process->pid);
+    if(hProcess)
+    {
+        populate_process_from_pid(process, hProcess);
+        ProcessTime *lastProcessTime = find_process_time_by_pid(process->pid);
+        populate_process_cpu_usage(process, lastProcessTime, hProcess);
+        ProcessIo *lastProcessIo = find_process_io_by_pid(process->pid);
+        populate_process_io(process, lastProcessIo, hProcess);
+        CloseHandle(hProcess);
+    }
+}
+
 void populate_processes(void)
 {
     HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPALL, 0);
@@ -732,6 +1233,8 @@ void populate_processes(void)
     pEntry.dwSize = sizeof(PROCESSENTRY32);
     unsigned int count = 0;
 
+    float reads = 0;
+    float writes = 0;
     g_numberOfThreads = 0;
     do
     {
@@ -754,11 +1257,15 @@ void populate_processes(void)
                 populate_process_cpu_usage(&g_processes[count], lastProcessTime, hProcess);
                 ProcessIo *lastProcessIo = find_process_io_by_pid(g_processes[count].pid);
                 populate_process_io(&g_processes[count], lastProcessIo, hProcess);
+                reads = reads + g_processes[count].ioReadsPerSecond;
+                writes = writes + g_processes[count].ioWritesPerSecond;
                 CloseHandle(hProcess);
                 count++;
             }
         }
     } while(Process32Next(hSnapshot, &pEntry));
+
+    add_io_reading(reads, writes);
 
     g_numberOfProcesses = count;
     for(int i = 0; i < g_numberOfProcesses; i++)
@@ -917,16 +1424,213 @@ void print_processes(void)
     clear_process_list_at_index(numberOfItemsToPrint);
 }
 
+//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
+
+void print_focused_process(Process *process)
+{
+    if(!process->pid)
+    {
+        return;
+    }
+
+    FILETIME creationTime, exitTime, kernelTime, userTime;
+    CHAR lpImageFileName[MAX_PATH];
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, process->pid);
+    PSAPI_WORKING_SET_EX_INFORMATION wsInfo = { 0 };
+    if(hProcess)
+    {
+        GetProcessTimes(hProcess, &creationTime, &exitTime, &kernelTime, &userTime);
+        GetProcessImageFileNameA(
+                hProcess,
+                lpImageFileName,
+                MAX_PATH);
+        GetProcessMemoryInfo(hProcess, &pmc, sizeof(pmc));
+        QueryWorkingSetEx(hProcess, &wsInfo, sizeof(wsInfo));
+    }
+
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 0);
+    DialogConPrintf("Process");
+
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 1);
+    DialogConPrintf(
+            "%-25s %d",
+            "Pid:",
+            g_focusedProcessPid);
+
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 2);
+    DialogConPrintf(
+            "%-25s %s",
+            "Path:",
+            lpImageFileName);
+
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 3);
+    DialogConPrintf("");
+
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 4);
+    DialogConPrintf("Memory");
+
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 5);
+    DialogConPrintf(
+            "%-35s %20d",
+            "Working Set:",
+            process->workingSet);
+
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 6);
+    DialogConPrintf(
+            "%-35s %20d",
+            "Private Bytes:",
+            process->privateBytes);
+
+    TCHAR pageFaultCountStr[MAX_PATH];
+    FormatNumber(pageFaultCountStr, pmc.PageFaultCount / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 7);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Page Fault Count",
+            pageFaultCountStr);
+
+    TCHAR peakWorkingSetStr[MAX_PATH];
+    FormatNumber(peakWorkingSetStr, pmc.PeakWorkingSetSize / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 8);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Peak Working Set Size",
+            peakWorkingSetStr);
+
+    TCHAR workingSetStr[MAX_PATH];
+    FormatNumber(workingSetStr, pmc.WorkingSetSize / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 9);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Working Set Size",
+            workingSetStr);
+
+    TCHAR quotaPeakPagedPoolUsageStr[MAX_PATH];
+    FormatNumber(quotaPeakPagedPoolUsageStr, pmc.QuotaPeakPagedPoolUsage / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 10);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Quota Peak Paged Pool Usage:",
+            quotaPeakPagedPoolUsageStr);
+
+    TCHAR quotaPagedPoolUsageStr[MAX_PATH];
+    FormatNumber(quotaPagedPoolUsageStr, pmc.QuotaPagedPoolUsage / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 11);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Quota Paged Pool Usage:",
+            quotaPagedPoolUsageStr);
+
+    TCHAR quotaPeakNonPagedPoolUsageStr[MAX_PATH];
+    FormatNumber(quotaPeakNonPagedPoolUsageStr, pmc.QuotaPeakNonPagedPoolUsage / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 12);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Quota Peak Non Paged Pool Usage:",
+            quotaPeakNonPagedPoolUsageStr);
+
+    TCHAR quotaNonPagedPoolUsageStr[MAX_PATH];
+    FormatNumber(quotaNonPagedPoolUsageStr, pmc.QuotaNonPagedPoolUsage / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 13);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Quota Non Paged Pool Usage:",
+            quotaNonPagedPoolUsageStr);
+
+    TCHAR pageFileUsageStr[MAX_PATH];
+    FormatNumber(pageFileUsageStr, pmc.PagefileUsage / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 13);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Page File Usage:",
+            pageFileUsageStr);
+
+    TCHAR peakPageFileUsageStr[MAX_PATH];
+    FormatNumber(peakPageFileUsageStr, pmc.PeakPagefileUsage / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 14);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Peak Page File Usage:",
+            peakPageFileUsageStr);
+
+    TCHAR privateUsageStr[MAX_PATH];
+    FormatNumber(privateUsageStr, pmc.PrivateUsage / 1024, &g_numFmt);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 15);
+    DialogConPrintf(
+            "%-35s %20s",
+            "Private Usage:",
+            privateUsageStr);
+
+    TCHAR systemTimeStr[MAX_PATH];
+    format_time(systemTimeStr, process->cpuSystemTime);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 16);
+    DialogConPrintf("");
+
+    TCHAR processTimeStr[MAX_PATH];
+    format_time(processTimeStr, process->cpuProcessTime);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 17);
+    DialogConPrintf("CPU");
+
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 18);
+    DialogConPrintf(
+            "%-20s %13.1f %%",
+            "Cpu Percent:",
+            process->cpuPercent);
+
+    TCHAR processUserTimeStr[MAX_PATH];
+    FileTimeToString(&userTime, processUserTimeStr, MAX_PATH);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 19);
+    DialogConPrintf(
+            "%-20s %15s",
+            "Cpu User Time:",
+            processUserTimeStr);
+
+    TCHAR processKernelTimeStr[MAX_PATH];
+    FileTimeToString(&kernelTime, processKernelTimeStr, MAX_PATH);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 20);
+    DialogConPrintf(
+            "%-20s %15s",
+            "Cpu Kernel Time:",
+            processKernelTimeStr);
+}
+
+void draw_focused_process_window(void)
+{
+    draw_rect(&g_help_view_border_rect);
+    clear_rect(&g_help_view_rect);
+
+    Process process;
+    populate_focused_process(&process);
+    print_focused_process(&process);
+}
+
+void focus_current_process(void)
+{
+    draw_focused_process_window();
+    g_focusedProcessPid = g_processes[g_selectedIndex].pid;
+    g_mode = ProcessDetails;
+}
+
 DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
 {
     UNREFERENCED_PARAMETER(lpParam);
 
     while(1)
     {
+        if(g_mode == ProcessDetails)
+        {
+            Process process;
+            populate_focused_process(&process);
+            print_focused_process(&process);
+        }
+
         add_cpu_reading();
+        populate_drive_io();
         EnterCriticalSection(&SyncLock);
         refreshsummary();
         paint_graph_window();
+        paint_graph_window2();
         populate_processes();
         qsort(&g_processes[0], g_numberOfProcesses + 1, sizeof(Process), CompareProcessForSort);
         print_processes();
@@ -936,39 +1640,6 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
     }
 
     return 0;
-}
-
-void draw_box(SHORT top, SHORT bottom, SHORT left, SHORT width)
-{
-    //218 ┌
-    //191 ┐
-    //179 │
-    //192 └
-    //217 ┘
-
-    SetConCursorPos(left, top);
-    ConPutc(218);
-    for(int i = 1; i < width - 1; i++)
-    {
-        ConPutc(196);
-    }
-
-    ConPutc(191);
-    for(SHORT i = 1; i < bottom - top + 1; i++)
-    {
-        SetConCursorPos(left, i + top);
-        ConPutc(179);
-        SetConCursorPos(left + width - 1, i + top);
-        ConPutc(179);
-    }
-    SetConCursorPos(left, bottom);
-    ConPutc(192);
-
-    for(int i = 1; i < width - 1; i++)
-    {
-        ConPutc(196);
-    }
-    ConPutc(217);
 }
 
 void calcuate_layout(void)
@@ -982,14 +1653,17 @@ void calcuate_layout(void)
     Height = Csbi.srWindow.Bottom - Csbi.srWindow.Top + 1;
 
     g_summary_view_border_top = 0;
-    g_summary_view_border_bottom = 11;
+    g_summary_view_border_bottom = 12;
     g_summary_view_border_left = 0;
     g_summary_view_border_right = Width;
 
+    g_cpu_graph_border_left = g_summary_view_border_left + 30;
+
+    SHORT graphsWidth = g_summary_view_right - g_cpu_graph_border_left;
+
     g_cpu_graph_border_top = g_summary_view_border_top;
     g_cpu_graph_border_bottom = g_summary_view_border_bottom;
-    g_cpu_graph_border_left = g_summary_view_border_left + 30;
-    g_cpu_graph_border_right = g_summary_view_border_right;
+    g_cpu_graph_border_right = (graphsWidth / 2) + 30;
 
     g_cpu_graph_axis_left = g_cpu_graph_border_left + 1;
 
@@ -999,6 +1673,20 @@ void calcuate_layout(void)
     g_cpu_graph_right = g_cpu_graph_border_right - 1;
 
     NUMBER_OF_CPU_READINGS = g_cpu_graph_right - g_cpu_graph_axis_left;
+
+    g_io_graph_border_top = g_summary_view_border_top;
+    g_io_graph_border_bottom = g_summary_view_border_bottom;
+    g_io_graph_border_left = g_cpu_graph_border_right;
+    g_io_graph_border_right = g_summary_view_border_right;
+
+    g_io_graph_axis_left = g_io_graph_border_left + 1;
+
+    g_io_graph_top = g_summary_view_top;
+    g_io_graph_bottom = g_io_graph_border_bottom - 1;
+    g_io_graph_left = g_io_graph_axis_left + 1;
+    g_io_graph_right = g_io_graph_border_right - 1;
+
+    NUMBER_OF_IO_READINGS = g_io_graph_right - g_io_graph_axis_left - 2;
 
     if(g_mode == Search)
     {
@@ -1041,10 +1729,39 @@ void calcuate_layout(void)
     g_processes_view_left = g_processes_view_border_left + 2;
     g_processes_view_right = g_processes_view_border_right - 2;
 
+    g_help_view_border_rect.top = 15;
+    g_help_view_border_rect.left = 15;
+    g_help_view_border_rect.bottom = Height - 15;
+    g_help_view_border_rect.right = Width - 15;
+
+    g_help_view_rect.top = g_help_view_border_rect.top + 1;
+    g_help_view_rect.left = g_help_view_border_rect.left + 1;
+    g_help_view_rect.bottom =g_help_view_border_rect.bottom - 1;
+    g_help_view_rect.right = g_help_view_border_rect.right - 1;
+
     g_processes_view_number_of_display_lines = g_processes_view_bottom - g_processes_view_top + 1;
 
     int nonNameWidth = 1 + 8 + 1 + 20 + 1 + 8 + 1 + 20 + 1 + 8 + 1 + 8 + 1 + 8 + 13;
     g_nameWidth = g_processes_view_right - g_processes_view_left - nonNameWidth;
+}
+
+void draw_help_window(void)
+{
+    char lines[3][25] = {
+        "q: quit",
+        "j: down",
+        "k: up"
+    };
+    draw_rect(&g_help_view_border_rect);
+    clear_rect(&g_help_view_rect);
+
+    for(int i = 0; i < 3; i ++)
+    {
+        SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + i);
+        DialogConPrintf(
+                "%s",
+                lines[i]);
+    }
 }
 
 void draw_processes_window(void)
@@ -1072,6 +1789,7 @@ void draw_summary_window(void)
 {
     draw_box(g_summary_view_border_top, g_summary_view_border_bottom, g_summary_view_border_left, g_summary_view_border_right);
     draw_box(g_cpu_graph_border_top, g_cpu_graph_border_bottom, g_cpu_graph_border_left, g_cpu_graph_border_right - g_cpu_graph_border_left);
+    draw_box(g_io_graph_border_top, g_io_graph_border_bottom, g_io_graph_border_left, g_io_graph_border_right - g_io_graph_border_left);
 
     refreshsummary();
 }
@@ -1172,6 +1890,9 @@ int _tmain(int argc, TCHAR *argv[])
     UNREFERENCED_PARAMETER(argc);
     UNREFERENCED_PARAMETER(argv);
 
+    populate_drives();
+
+    sm_EnableTokenPrivilege(SE_DEBUG_NAME);
     InitializeCriticalSection(&SyncLock);
     slab = fzf_make_default_slab();
 
@@ -1385,6 +2106,13 @@ int _tmain(int argc, TCHAR *argv[])
                                     draw_processes_window();
                                     LeaveCriticalSection(&SyncLock);
                                     break;
+                                case 'l':
+                                    focus_current_process();
+                                    break;
+                                case '?':
+                                    draw_help_window();
+                                    g_mode = Help;
+                                    break;
                                 default:
                                     break;
                             }
@@ -1426,6 +2154,23 @@ int _tmain(int argc, TCHAR *argv[])
                                         draw_search_view();
                                         LeaveCriticalSection(&SyncLock);
                                     }
+                                    break;
+                            }
+                        }
+                        else if(g_mode == Help || g_mode == ProcessDetails)
+                        {
+                            switch(InputRecord.Event.KeyEvent.uChar.AsciiChar)
+                            {
+                                case VK_ESCAPE:
+                                    g_mode = Normal;
+                                    EnterCriticalSection(&SyncLock);
+                                    draw_summary_window();
+                                    draw_search_view();
+                                    draw_processes_window();
+                                    LeaveCriticalSection(&SyncLock);
+                                    break;
+                                case 'q':
+                                    return EXIT_SUCCESS;
                                     break;
                             }
                         }
