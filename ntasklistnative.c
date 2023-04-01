@@ -46,14 +46,52 @@ struct Drive
     float writesPerSecond;
 };
 
+typedef struct Process Process;
+struct Process
+{
+    DWORD pid;
+    TCHAR *name;
+    size_t workingSet;
+    size_t privateBytes;
+    float cpuPercent;
+    float ioWritesPerSecond;
+    float ioReadsPerSecond;
+    int numberOfThreads;
+    unsigned __int64 upTime;
+    unsigned __int64 cpuSystemTime;
+    unsigned __int64 cpuProcessTime;
+    /* unsigned __int64 cpuKernelTime; */
+    FILETIME cpuKernelTime;
+    unsigned __int64 cpuUserTime;
+    unsigned __int64 ioSystemTime;
+    unsigned __int64 ioReads;
+    unsigned __int64 ioWrites;
+    Process *next;
+};
+
 typedef struct CpuReading CpuReading;
 struct CpuReading
 {
     SHORT value;
+    WORD second;
+    WORD minute;
+    WORD hour;
+    int numberOfProcesses;
+    int numberOfThreads;
+    DWORD memoryPercent;
+    DWORDLONG totalMemory;
+    DWORDLONG availableMemory;
+    float readsPerSecond;
+    float writesPerSecond;
     ULONGLONG idle;
     ULONGLONG krnl;
     ULONGLONG usr;
     CpuReading *next;
+    CpuReading *previous;
+    Process *processes;
+    Process **processes2;
+    Process *lastProcess;
+    int processArraySize;
 };
 
 typedef struct IoReading IoReading;
@@ -79,27 +117,6 @@ typedef struct ProcessIo
     unsigned __int64 writes;
 } ProcessIo;
 
-typedef struct Process
-{
-    DWORD pid;
-    TCHAR *name;
-    size_t workingSet;
-    size_t privateBytes;
-    float cpuPercent;
-    float ioWritesPerSecond;
-    float ioReadsPerSecond;
-    int numberOfThreads;
-    unsigned __int64 upTime;
-    unsigned __int64 cpuSystemTime;
-    unsigned __int64 cpuProcessTime;
-    /* unsigned __int64 cpuKernelTime; */
-    FILETIME cpuKernelTime;
-    unsigned __int64 cpuUserTime;
-    unsigned __int64 ioSystemTime;
-    unsigned __int64 ioReads;
-    unsigned __int64 ioWrites;
-} Process;
-
 typedef struct ProcessSnapshot
 {
     DWORD pid;
@@ -111,7 +128,9 @@ enum Mode
     Normal,
     Search,
     Help,
-    ProcessDetails
+    ProcessDetails,
+    ReadingsList,
+    ProcessHistory
 };
 
 fzf_slab_t *slab;
@@ -124,13 +143,15 @@ enum Mode g_mode = Normal;
 ULONGLONG g_upTime;
 CpuReading *g_cpuReadings;
 CpuReading *g_lastCpuReading;
+CpuReading *g_lastDisplayCpuReading;
 int g_MaxCpuPercent;
+SHORT g_selectedCpuReadingIndex;
 
 int g_cpuReadingIndex = 0;
 int g_numberOfProcesses = 0;
 int g_processor_count_ = 0;
 int g_numberOfThreads = 0;
-Process g_processes[1024];
+Process *g_processes[1024];
 int g_sortColumn = 5;
 SHORT g_selectedIndex = 0;
 DWORD g_focusedProcessPid;
@@ -234,6 +255,16 @@ int g_scrollOffset = 0;
 #else
 #define NORETURN
 #endif
+
+unsigned __int64 ConvertFileTimeToInt64(FILETIME *fileTime)
+{
+    ULARGE_INTEGER result;
+
+    result.LowPart  = fileTime->dwLowDateTime;
+    result.HighPart = fileTime->dwHighDateTime;
+
+    return result.QuadPart;
+}
 
 BOOL sm_EnableTokenPrivilege(LPCTSTR pszPrivilege)
 {
@@ -421,7 +452,7 @@ static int ConPrintf(TCHAR *Fmt, ...)
     int CharsWritten = _vstprintf_s(Buffer, _countof(Buffer), Fmt, VaList);
     va_end(VaList);
 
-    if((g_mode != Help && g_mode != ProcessDetails) || !is_inside_vertical_of_rect(&cbsi.dwCursorPosition, &g_help_view_border_rect))
+    if((g_mode != Help && g_mode != ProcessDetails) && g_mode != ReadingsList || !is_inside_vertical_of_rect(&cbsi.dwCursorPosition, &g_help_view_border_rect))
     {
         DWORD Dummy;
         WriteConsole(ConsoleHandle, Buffer, CharsWritten, &Dummy, 0);
@@ -515,17 +546,13 @@ BOOL FileTimeToString(const FILETIME* pFileTime, LPSTR lpString, int cchString)
     ULONGLONG hours = minutes / 60;
     ULONGLONG days = hours / 24;
 
-    // Calculate remaining time values
     ULONGLONG remainingHours = hours % 24;
     ULONGLONG remainingMinutes = minutes % 60;
     ULONGLONG remainingSeconds = seconds % 60;
 
-    // Format the result string
-    /* int result = sprintf_s(lpString, cchString, "%llu days, %llu hours, %llu minutes, %llu seconds", days, remainingHours, remainingMinutes, remainingSeconds); */
     wsprintf(lpString, _T("%02d:%02d:%02d:%02d"), days, remainingHours, remainingMinutes, remainingSeconds);
 
     return 0;
-    /* return (result > 0); */
 }
 
 void format_time(TCHAR *toFill, ULONGLONG value)
@@ -583,6 +610,11 @@ void fill_cpu_usage(CpuReading *toFill, CpuReading *lastReading)
         ULONGLONG uKrnl = ((ULONGLONG)ftKrnl.dwHighDateTime << 32) | ftKrnl.dwLowDateTime;
         ULONGLONG uUsr = ((ULONGLONG)ftUsr.dwHighDateTime << 32) | ftUsr.dwLowDateTime;
 
+        SYSTEMTIME lt;
+        GetLocalTime(&lt);
+        toFill->second = lt.wSecond;
+        toFill->minute = lt.wMinute;
+        toFill->hour = lt.wHour;
         toFill->idle = uIdle;
         toFill->krnl = uKrnl;
         toFill->usr = uUsr;
@@ -610,6 +642,16 @@ void fill_cpu_usage(CpuReading *toFill, CpuReading *lastReading)
             toFill->value = 0;
         }
     }
+
+    MEMORYSTATUSEX statex;
+    statex.dwLength = sizeof (statex);
+
+    GlobalMemoryStatusEx (&statex);
+    toFill->availableMemory = statex.ullTotalPhys;
+    toFill->totalMemory = statex.ullAvailPhys;
+    toFill->memoryPercent = statex.dwMemoryLoad;
+    toFill->numberOfProcesses = g_numberOfProcesses;
+    toFill->numberOfThreads = g_numberOfThreads;
 }
 
 static int get_processor_number()
@@ -655,19 +697,24 @@ void add_io_reading(float reads, float writes)
     }
 }
 
-void add_cpu_reading(void)
+CpuReading *add_cpu_reading(void)
 {
+    CpuReading *result;
     if(!g_cpuReadings)
     {
         g_cpuReadings = calloc(1, sizeof(CpuReading));
+        g_cpuReadings->processes = calloc(g_numberOfProcesses, sizeof(Process));
         fill_cpu_usage(g_cpuReadings, NULL);
         g_lastCpuReading = g_cpuReadings;
         g_cpuReadingIndex = 1;
+        result = g_cpuReadings;
     }
     else
     {
         CpuReading *cpuReading = calloc(1, sizeof(CpuReading));
+        cpuReading->processes = calloc(g_numberOfProcesses, sizeof(Process*));
         fill_cpu_usage(cpuReading, g_lastCpuReading);
+        cpuReading->previous = g_lastCpuReading;
         g_lastCpuReading->next = cpuReading;
         g_lastCpuReading = cpuReading;
 
@@ -675,29 +722,33 @@ void add_cpu_reading(void)
         {
             CpuReading *firstReading = g_cpuReadings;
             g_cpuReadings = firstReading->next;
+
+            for(int i = 0; i < firstReading->numberOfProcesses; i++)
+            {
+                free(firstReading->processes[i]->name);
+                free(firstReading->processes[i]);
+            }
+
+            free(firstReading->processes);
             free(firstReading);
         }
         else
         {
             g_cpuReadingIndex++;
         }
+
+        result = cpuReading;
     }
-}
 
-void point_graph_axis_markers(void)
-{
-    SetConCursorPos(g_cpu_graph_axis_left, g_cpu_graph_top);
-    ConPrintf("(y) %s  (max) %d %%", "100%", g_MaxCpuPercent);
-
-    for(SHORT i = 0; i < 10; i++)
+    for(int i = 0; i < g_numberOfProcesses; i++)
     {
-        SetConCursorPos(g_cpu_graph_axis_left, g_cpu_graph_bottom - i);
-        /* ConPutc(196); */
-        ConPutc('_');
+        result->processes[i] = g_processes[i];
     }
+
+    return result;
 }
 
-void point_graph_axis_markers2(SHORT areaLeft, SHORT areaBottom)
+void paint_graph_axis_markers(SHORT areaLeft, SHORT areaBottom)
 {
     CHAR ioAxisStr[MAX_PATH];
     FormatNumber(ioAxisStr, g_largestIoReading + 1000, &g_numFmt);
@@ -712,55 +763,6 @@ void point_graph_axis_markers2(SHORT areaLeft, SHORT areaBottom)
         SetConCursorPos(areaLeft, areaBottom - i);
         ConPutc('_');
     }
-}
-
-void paint_graph_column(SHORT readingNumber, SHORT value)
-{
-    SetColor(FOREGROUND_INTENSITY);
-    WCHAR lowerEigth = { 0x2581 };
-    WCHAR lowerQuarter = { 0x2582 };
-    WCHAR lowerHalf = { 0x2583 };
-    WCHAR fullBar = { 0x2588 };
-    SHORT numberOfFullNumbers = value / 10;
-    for(SHORT i = 0; i < 10; i++)
-    {
-        SetConCursorPos(g_cpu_graph_left + readingNumber, g_cpu_graph_bottom - i);
-        if(i == numberOfFullNumbers)
-        {
-            int remainder = value % 10;
-            if(remainder == 0)
-            {
-                ConPutc(' ');
-            }
-            else if(remainder <= 2)
-            {
-                /* SHORT row = g_cpu_graph_bottom - numberOfFullNumbers - 2; */
-                /* SetConCursorPos(g_cpu_graph_left + readingNumber, row); */
-                ConPutcW(lowerEigth);
-            }
-            else if(remainder < 5)
-            {
-                /* SHORT row = g_cpu_graph_bottom - numberOfFullNumbers - 2; */
-                /* SetConCursorPos(g_cpu_graph_left + readingNumber, row); */
-                ConPutcW(lowerQuarter);
-            }
-            else if(remainder >= 5)
-            {
-                /* SHORT row = g_cpu_graph_bottom - numberOfFullNumbers; */
-                /* SetConCursorPos(g_cpu_graph_left + readingNumber, row); */
-                ConPutcW(lowerHalf);
-            }
-        }
-        else if(i > numberOfFullNumbers)
-        {
-            ConPutc(' ');
-        }
-        else
-        {
-            ConPutcW(fullBar);
-        }
-    }
-
 }
 
 void paint_graph_column2(SHORT areaLeft, SHORT areaBottom, SHORT readingNumber, SHORT value)
@@ -806,7 +808,7 @@ void paint_graph_column2(SHORT areaLeft, SHORT areaBottom, SHORT readingNumber, 
 
 }
 
-void paint_graph_window()
+void paint_cpu_graph_window()
 {
     SHORT width = g_cpu_graph_border_right - g_cpu_graph_border_left;
     SHORT middle = width / 2;
@@ -815,22 +817,21 @@ void paint_graph_window()
 
     SetConCursorPos(g_cpu_graph_border_left + headerLeft, g_cpu_graph_border_top);
     ConPrintf(" %s ", "CPU");
-
-    point_graph_axis_markers();
+    paint_graph_axis_markers(g_cpu_graph_border_left + 1, g_cpu_graph_bottom);
     SHORT readingIndex = 0;
 
     CpuReading *currentReading = g_cpuReadings;
     while(currentReading)
     {
-        paint_graph_column(readingIndex, currentReading->value);
+        paint_graph_column2(g_cpu_graph_left, g_cpu_graph_bottom, readingIndex, currentReading->value);
         currentReading = currentReading->next;
         readingIndex++;
     }
 }
 
-void paint_graph_window2()
+void paint_io_graph_window()
 {
-    SHORT width = g_cpu_graph_border_right - g_cpu_graph_border_left;
+    SHORT width = g_io_graph_border_right - g_io_graph_border_left;
     SHORT middle = width / 2;
     SHORT middleOfHeader = strlen(" IO ") / 2;
     SHORT headerLeft = middle - middleOfHeader;
@@ -838,7 +839,7 @@ void paint_graph_window2()
     SetConCursorPos(g_io_graph_border_left + headerLeft, g_io_graph_border_top);
     ConPrintf(" %s ", "IO");
 
-    point_graph_axis_markers2(g_io_graph_left, g_io_graph_bottom);
+    paint_graph_axis_markers(g_io_graph_left, g_io_graph_bottom);
     SHORT readingIndex = 0;
 
     IoReading *currentReading = g_ioReadings;
@@ -853,16 +854,6 @@ void paint_graph_window2()
 
 void refreshsummary()
 {
-    CHAR modeBuff[MAX_PATH];
-    if(g_mode == Normal)
-    {
-        StringCchCopyA (modeBuff, MAX_PATH, "Normal");
-    }
-    else if(g_mode == Search)
-    {
-        StringCchCopyA(modeBuff, MAX_PATH, "Search");
-    }
-
     g_upTime = GetTickCount64();
 
     MEMORYSTATUSEX statex;
@@ -965,16 +956,6 @@ void refreshsummary()
                 "IO Writes:",
                 g_lastIoReading->writesPerSecond);
     }
-}
-
-unsigned __int64 ConvertFileTimeToInt64(FILETIME *fileTime)
-{
-    ULARGE_INTEGER result;
-
-    result.LowPart  = fileTime->dwLowDateTime;
-    result.HighPart = fileTime->dwHighDateTime;
-
-    return result.QuadPart;
 }
 
 void populate_drives(void)
@@ -1173,10 +1154,10 @@ void populate_process_from_pid(Process *process, HANDLE hProcess)
     process->workingSet = pmc.WorkingSetSize / 1024;
 }
 
-int CompareProcessForSort(const void *a, const void *b)
+int CompareProcessForSort2(const void *a, const void *b)
 {
-    Process *processA = (Process *)a;
-    Process *processB = (Process *)b;
+    Process *processA = *(Process **)a;
+    Process *processB = *(Process **)b;
 
     if(g_sortColumn == 1)
     {
@@ -1225,7 +1206,24 @@ void populate_focused_process(Process *process)
     }
 }
 
-void populate_processes(void)
+void populate_process(Process *process, PROCESSENTRY32 *pEntry)
+{
+    process->name = StrDupA(pEntry->szExeFile);
+    process->pid = pEntry->th32ProcessID;
+    process->numberOfThreads = pEntry->cntThreads;
+    HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pEntry->th32ProcessID);
+    if(hProcess)
+    {
+        populate_process_from_pid(process, hProcess);
+        ProcessTime *lastProcessTime = find_process_time_by_pid(process->pid);
+        populate_process_cpu_usage(process, lastProcessTime, hProcess);
+        ProcessIo *lastProcessIo = find_process_io_by_pid(process->pid);
+        populate_process_io(process, lastProcessIo, hProcess);
+        CloseHandle(hProcess);
+    }
+}
+
+void populate_processes(CpuReading *reading)
 {
     HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPALL, 0);
 
@@ -1240,49 +1238,35 @@ void populate_processes(void)
     {
         if(pEntry.szExeFile[0] != '\0')
         {
-            if(g_processes[count].name)
-            {
-                free(g_processes[count].name);
-            }
-            g_processes[count].name = StrDupA(pEntry.szExeFile);
-            g_processes[count].pid = pEntry.th32ProcessID;
-            int processNumberOfThreads = pEntry.cntThreads;
-            g_numberOfThreads += processNumberOfThreads;
-            g_processes[count].numberOfThreads = processNumberOfThreads;
-            HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pEntry.th32ProcessID);
-            if(hProcess)
-            {
-                populate_process_from_pid(&g_processes[count], hProcess);
-                ProcessTime *lastProcessTime = find_process_time_by_pid(g_processes[count].pid);
-                populate_process_cpu_usage(&g_processes[count], lastProcessTime, hProcess);
-                ProcessIo *lastProcessIo = find_process_io_by_pid(g_processes[count].pid);
-                populate_process_io(&g_processes[count], lastProcessIo, hProcess);
-                reads = reads + g_processes[count].ioReadsPerSecond;
-                writes = writes + g_processes[count].ioWritesPerSecond;
-                CloseHandle(hProcess);
-                count++;
-            }
+            g_processes[count] = calloc(1, sizeof(Process));
+            populate_process(g_processes[count], &pEntry);
+            g_numberOfThreads += g_processes[count]->numberOfThreads;
+            reads = reads + g_processes[count]->ioReadsPerSecond;
+            writes = writes + g_processes[count]->ioWritesPerSecond;
+            count++;
         }
     } while(Process32Next(hSnapshot, &pEntry));
 
+    reading->readsPerSecond = reads;
+    reading->writesPerSecond = writes;
     add_io_reading(reads, writes);
 
     g_numberOfProcesses = count;
     for(int i = 0; i < g_numberOfProcesses; i++)
     {
-        g_lastProcessTimes[i].pid = g_processes[i].pid;
-        g_lastProcessTimes[i].systemTime = g_processes[i].cpuSystemTime;
-        g_lastProcessTimes[i].processTime = g_processes[i].cpuProcessTime;
+        g_lastProcessTimes[i].pid = g_processes[i]->pid;
+        g_lastProcessTimes[i].systemTime = g_processes[i]->cpuSystemTime;
+        g_lastProcessTimes[i].processTime = g_processes[i]->cpuProcessTime;
     }
 
     g_numberOfLastProcessTimes = g_numberOfProcesses;
 
     for(int i = 0; i < g_numberOfProcesses; i++)
     {
-        g_lastProcessIoReadings[i].pid = g_processes[i].pid;
-        g_lastProcessIoReadings[i].systemTime = g_processes[i].ioSystemTime;
-        g_lastProcessIoReadings[i].reads = g_processes[i].ioReads;
-        g_lastProcessIoReadings[i].writes = g_processes[i].ioWrites;
+        g_lastProcessIoReadings[i].pid = g_processes[i]->pid;
+        g_lastProcessIoReadings[i].systemTime = g_processes[i]->ioSystemTime;
+        g_lastProcessIoReadings[i].reads = g_processes[i]->ioReads;
+        g_lastProcessIoReadings[i].writes = g_processes[i]->ioWrites;
     }
 
     g_numberOfLastProcessIoReadings = g_numberOfProcesses;
@@ -1384,13 +1368,13 @@ void print_processes(void)
         for(int i = 0; i < g_numberOfProcesses; i++)
         {
             int score = 0;
-            if(g_processes[i].name)
+            if(g_processes[i]->name)
             {
-                score = fzf_get_score(g_processes[i].name, pattern, slab);
+                score = fzf_get_score(g_processes[i]->name, pattern, slab);
             }
             if(score > 0)
             {
-                g_displayProcesses[numberOfDisplayItems] = &g_processes[i];
+                g_displayProcesses[numberOfDisplayItems] = g_processes[i];
                 numberOfDisplayItems++;
             }
         }
@@ -1399,7 +1383,7 @@ void print_processes(void)
     {
         for(int i = 0; i < g_numberOfProcesses; i++)
         {
-            g_displayProcesses[numberOfDisplayItems] = &g_processes[i];
+            g_displayProcesses[numberOfDisplayItems] = g_processes[i];
             numberOfDisplayItems++;
         }
     }
@@ -1423,8 +1407,6 @@ void print_processes(void)
 
     clear_process_list_at_index(numberOfItemsToPrint);
 }
-
-//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
 
 void print_focused_process(Process *process)
 {
@@ -1608,7 +1590,7 @@ void draw_focused_process_window(void)
 void focus_current_process(void)
 {
     draw_focused_process_window();
-    g_focusedProcessPid = g_processes[g_selectedIndex].pid;
+    g_focusedProcessPid = g_processes[g_selectedIndex]->pid;
     g_mode = ProcessDetails;
 }
 
@@ -1625,14 +1607,14 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
             print_focused_process(&process);
         }
 
-        add_cpu_reading();
+        CpuReading *reading = add_cpu_reading();
         populate_drive_io();
         EnterCriticalSection(&SyncLock);
         refreshsummary();
-        paint_graph_window();
-        paint_graph_window2();
-        populate_processes();
-        qsort(&g_processes[0], g_numberOfProcesses + 1, sizeof(Process), CompareProcessForSort);
+        paint_cpu_graph_window();
+        populate_processes(reading);
+        paint_io_graph_window();
+        qsort(g_processes, g_numberOfProcesses, sizeof(Process*), CompareProcessForSort2);
         print_processes();
         LeaveCriticalSection(&SyncLock);
 
@@ -1743,6 +1725,282 @@ void calcuate_layout(void)
 
     int nonNameWidth = 1 + 8 + 1 + 20 + 1 + 8 + 1 + 20 + 1 + 8 + 1 + 8 + 1 + 8 + 13;
     g_nameWidth = g_processes_view_right - g_processes_view_left - nonNameWidth;
+}
+
+void print_cpu_reading_at_index(CpuReading *reading, int index)
+{
+    int columnWidth = 12;
+    int windowWidth = g_help_view_rect.right - g_help_view_rect.left - 1;
+    int numberOfColumns = 8;
+    int timeWidth = windowWidth - (columnWidth * numberOfColumns);
+
+    CHAR totalMemoryInUnits[MAX_PATH];
+    fill_size_in_units(totalMemoryInUnits, MAX_PATH, reading->totalMemory);
+
+    CHAR availableMemoryInUnits[MAX_PATH];
+    fill_size_in_units(availableMemoryInUnits, MAX_PATH, reading->availableMemory);
+
+    TCHAR memStr[MAX_PATH];
+    sprintf_s(
+            memStr,
+            MAX_PATH,
+            "%3d%%",
+            reading->memoryPercent);
+
+    if(index == g_selectedCpuReadingIndex)
+    {
+        SetColor(BACKGROUND_WHITE);
+    }
+    else
+    {
+        SetColor(FOREGROUND_INTENSITY);
+    }
+
+    CHAR timeStr[25];
+    sprintf_s(
+            timeStr,
+            25,
+            "%02d:%02d:%02d",
+            reading->hour,
+            reading->minute,
+            reading->second);
+
+    char percentStr[25];
+    sprintf_s(
+            percentStr,
+            25,
+            "%-d",
+            reading->value);
+
+    char numProcessStr[25];
+    sprintf_s(
+            numProcessStr,
+            25,
+            "%-8.1f",
+            reading->numberOfProcesses);
+
+    char numberOfThreadsStr[25];
+    sprintf_s(
+            numberOfThreadsStr,
+            25,
+            "%-8.1f",
+            reading->numberOfThreads);
+
+    char readsPerSecondStr[25];
+    sprintf_s(
+            readsPerSecondStr,
+            25,
+            "%-8.1f",
+            reading->readsPerSecond);
+
+    char writesPerSecondStr[25];
+    sprintf_s(
+            writesPerSecondStr,
+            25,
+            "%-8.1f",
+            reading->writesPerSecond);
+
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + index + 1);
+    DialogConPrintf(
+            "%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s",
+            timeWidth,
+            timeStr,
+            columnWidth,
+            percentStr,
+            columnWidth,
+            totalMemoryInUnits,
+            columnWidth,
+            availableMemoryInUnits,
+            columnWidth,
+            memStr,
+            columnWidth,
+            numProcessStr,
+            columnWidth,
+            numberOfThreadsStr,
+            columnWidth,
+            readsPerSecondStr,
+            columnWidth,
+            writesPerSecondStr);
+    reading = reading->next;
+}
+
+void draw_cpu_readings2(void)
+{
+    SHORT maxLines = g_help_view_rect.bottom - g_help_view_rect.top - 1;
+
+    CpuReading *current = g_lastDisplayCpuReading;
+    int i = 0;
+    while(current && i <= maxLines)
+    {
+        print_cpu_reading_at_index(current, i);
+        i++;
+        current = current->previous;
+    }
+    SetColor(FOREGROUND_INTENSITY);
+}
+
+void draw_cpu_readings(void)
+{
+    int columnWidth = 12;
+    int windowWidth = g_help_view_rect.right - g_help_view_rect.left - 1;
+    int numberOfColumns = 8;
+    int timeWidth = windowWidth - (columnWidth * numberOfColumns);
+
+    g_lastDisplayCpuReading = g_lastCpuReading;
+    g_selectedCpuReadingIndex = 0;
+    draw_rect(&g_help_view_border_rect);
+    clear_rect(&g_help_view_rect);
+
+    SetColor(FOREGROUND_CYAN);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top);
+    DialogConPrintf(
+            "%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s",
+            timeWidth,
+            "Time",
+            columnWidth,
+            "Cpu (%)",
+            columnWidth,
+            "Mem (T)",
+            columnWidth,
+            "Mem (A)",
+            columnWidth,
+            "Mem (%)",
+            columnWidth,
+            "Processes",
+            columnWidth,
+            "Threads",
+            columnWidth,
+            "Reads",
+            columnWidth,
+            "Writes");
+    SetColor(FOREGROUND_INTENSITY);
+    draw_cpu_readings2();
+}
+
+void draw_process_history(void)
+{
+    int columnWidth = 12;
+    int windowWidth = g_help_view_rect.right - g_help_view_rect.left - 1;
+    int numberOfColumns = 8;
+    int timeWidth = windowWidth - (columnWidth * numberOfColumns);
+    SHORT maxItems = g_help_view_rect.bottom - g_help_view_rect.top;
+
+    g_lastDisplayCpuReading = g_lastCpuReading;
+    draw_rect(&g_help_view_border_rect);
+    clear_rect(&g_help_view_rect);
+
+    SetColor(FOREGROUND_CYAN);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top);
+
+    DialogConPrintf(
+            "%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s",
+            timeWidth,
+            "Name",
+            columnWidth,
+            "PID",
+            columnWidth,
+            "UpTime",
+            columnWidth,
+            "Wk",
+            columnWidth,
+            "Pvt",
+            columnWidth,
+            "CPU(%)",
+            columnWidth,
+            "Threads",
+            columnWidth,
+            "Reads",
+            columnWidth,
+            "Writes");
+
+    SetColor(FOREGROUND_INTENSITY);
+
+    int j = 0;
+    CpuReading *current = g_cpuReadings;
+    CpuReading *readingToShow;
+    while(current)
+    {
+        if(j == g_selectedCpuReadingIndex)
+        {
+            readingToShow = current;
+            break;
+        }
+        current = current->next;
+        j++;
+    }
+
+    if(readingToShow)
+    {
+        qsort(readingToShow->processes2, readingToShow->numberOfProcesses - 1, sizeof(Process*), CompareProcessForSort2);
+        for(int i = 0; i < readingToShow->numberOfProcesses && i < maxItems; i++)
+        {
+            SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 1 + i);
+            char pidStr[25];
+            sprintf_s(
+                    pidStr,
+                    25,
+                    "%08d",
+                    readingToShow->processes2[i]->pid);
+
+            char percentStr[25];
+            sprintf_s(
+                    percentStr,
+                    25,
+                    "%.1f",
+                    readingToShow->processes2[i]->cpuPercent);
+
+            char numberOfThreadsStr[25];
+            sprintf_s(
+                    numberOfThreadsStr,
+                    25,
+                    "%.1f",
+                    readingToShow->processes2[i]->numberOfThreads);
+
+            char readsPerSecondStr[25];
+            sprintf_s(
+                    readsPerSecondStr,
+                    25,
+                    "%.1f",
+                    readingToShow->processes2[i]->ioReadsPerSecond);
+
+            char writesPerSecondStr[25];
+            sprintf_s(
+                    writesPerSecondStr,
+                    25,
+                    "%.1f",
+                    readingToShow->processes2[i]->ioWritesPerSecond);
+
+            TCHAR upTimeStr[MAX_PATH];
+            format_time(upTimeStr, readingToShow->processes2[i]->upTime);
+
+            CHAR privateBytesFormatedStr[MAX_PATH];
+            FormatNumber(privateBytesFormatedStr, readingToShow->processes2[i]->privateBytes, &g_numFmt);
+
+            CHAR workingSetFormatedStr[MAX_PATH];
+            FormatNumber(workingSetFormatedStr, readingToShow->processes2[i]->workingSet, &g_numFmt);
+
+            DialogConPrintf(
+                    "%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s",
+                    timeWidth,
+                    readingToShow->processes2[i]->name,
+                    columnWidth,
+                    pidStr,
+                    columnWidth,
+                    upTimeStr,
+                    columnWidth,
+                    privateBytesFormatedStr,
+                    columnWidth,
+                    workingSetFormatedStr,
+                    columnWidth,
+                    percentStr,
+                    columnWidth,
+                    numberOfThreadsStr,
+                    columnWidth,
+                    readsPerSecondStr,
+                    columnWidth,
+                    writesPerSecondStr);
+        }
+    }
 }
 
 void draw_help_window(void)
@@ -2113,6 +2371,10 @@ int _tmain(int argc, TCHAR *argv[])
                                     draw_help_window();
                                     g_mode = Help;
                                     break;
+                                case '.':
+                                    draw_cpu_readings();
+                                    g_mode = ReadingsList;
+                                    break;
                                 default:
                                     break;
                             }
@@ -2128,7 +2390,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     g_searchStringIndex = 0;
                                     clear_screen();
                                     calcuate_layout();
-                                    paint_graph_window();
+                                    paint_cpu_graph_window();
                                     draw_summary_window();
                                     draw_search_view();
                                     draw_processes_window();
@@ -2157,7 +2419,41 @@ int _tmain(int argc, TCHAR *argv[])
                                     break;
                             }
                         }
-                        else if(g_mode == Help || g_mode == ProcessDetails)
+                        else if(g_mode == ReadingsList)
+                        {
+                            switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
+                            {
+                                case VK_DOWN:
+                                    EnterCriticalSection(&SyncLock);
+                                    g_selectedCpuReadingIndex++;
+                                    draw_cpu_readings2();
+                                    LeaveCriticalSection(&SyncLock);
+                                    break;
+                                case VK_UP:
+                                    EnterCriticalSection(&SyncLock);
+                                    if(g_selectedCpuReadingIndex > 0)
+                                    {
+                                        g_selectedCpuReadingIndex--;
+                                        draw_cpu_readings2();
+                                    }
+                                    LeaveCriticalSection(&SyncLock);
+                                    break;
+                                case 0x4C:
+                                    EnterCriticalSection(&SyncLock);
+                                    draw_process_history();
+                                    LeaveCriticalSection(&SyncLock);
+                                    break;
+                                case VK_ESCAPE:
+                                    g_mode = Normal;
+                                    EnterCriticalSection(&SyncLock);
+                                    draw_summary_window();
+                                    draw_search_view();
+                                    draw_processes_window();
+                                    LeaveCriticalSection(&SyncLock);
+                                    break;
+                            }
+                        }
+                        else if(g_mode == Help || g_mode == ProcessDetails || g_mode == ReadingsList)
                         {
                             switch(InputRecord.Event.KeyEvent.uChar.AsciiChar)
                             {
