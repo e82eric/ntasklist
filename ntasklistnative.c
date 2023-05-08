@@ -133,6 +133,18 @@ enum Mode
     ProcessHistory
 };
 
+enum TextType
+{
+    Header,
+    Plain
+};
+
+typedef struct TextLine
+{
+    enum TextType lineType;
+    CHAR* text;
+} TextLine;
+
 fzf_slab_t *slab;
 
 static CRITICAL_SECTION SyncLock;
@@ -2007,31 +2019,39 @@ void draw_process_history(void)
 void draw_help_window(void)
 {
     int numberOfLines = 14;
-    char lines[MAX_PATH][25] = {
-        "Normal Mode:",
-        "q: quit",
-        "j: down",
-        "k: up",
-        "/: enter search mode",
-        ".: show reading history",
-        ",: clear filter",
-        "",
-        "Reading History",
-        "esc: back to normal mode",
-        "l: show process readings",
-        "",
-        "Search Mode:",
-        "esc: back to normal mode"
+    TextLine textLines[MAX_PATH] = {
+        { Header, "Normal Mode:" },
+        { Plain, "q: quit" },
+        { Plain, "j: down" },
+        { Plain, "k: up" },
+        { Plain, "/: search mode" },
+        { Plain, ".: reading history" },
+        { Plain, ",: clear filter" },
+        { Plain, "" },
+        { Header, "Reading History" },
+        { Plain, "esc: normal mode" },
+        { Plain, "l: show prcess readings" },
+        { Plain, "" },
+        { Header, "Search Mode" },
+        { Plain, "esc: normal mode" },
     };
     draw_rect(&g_help_view_border_rect);
     clear_rect(&g_help_view_rect);
 
     for(int i = 0; i < numberOfLines; i ++)
     {
+        if(textLines[i].lineType == Header)
+        {
+            SetColor(FOREGROUND_CYAN);
+        }
         SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + i);
         DialogConPrintf(
                 "%s",
-                lines[i]);
+                textLines[i].text);
+        if(textLines[i].lineType == Header)
+        {
+            SetColor(FOREGROUND_INTENSITY);
+        }
     }
 }
 
