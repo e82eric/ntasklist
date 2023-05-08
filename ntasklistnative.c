@@ -88,8 +88,8 @@ struct CpuReading
     ULONGLONG usr;
     CpuReading *next;
     CpuReading *previous;
-    Process *processes;
-    Process **processes2;
+    /* Process *processes; */
+    Process **processes;
     Process *lastProcess;
     int processArraySize;
 };
@@ -162,7 +162,7 @@ int g_ioReadingIndex;
 int g_largestIoReading;
 
 int g_numberOfDrives;
-Drive g_drives[MAX_PATH];
+/* Drive g_drives[MAX_PATH]; */
 
 char g_searchString[1024];
 SHORT g_searchStringIndex = 0;
@@ -958,95 +958,95 @@ void refreshsummary()
     }
 }
 
-void populate_drives(void)
-{
-    char buffer[MAX_PATH];
-    DWORD length = GetLogicalDriveStringsA(sizeof(buffer) - 1, buffer);
-    if (length == 0) {
-        printf("Error getting drive strings.\n");
-        return 1;
-    }
+/* void populate_drives(void) */
+/* { */
+/*     char buffer[MAX_PATH]; */
+/*     DWORD length = GetLogicalDriveStringsA(sizeof(buffer) - 1, buffer); */
+/*     if (length == 0) { */
+/*         printf("Error getting drive strings.\n"); */
+/*         return 1; */
+/*     } */
 
-    char* p = buffer;
-    int counter = 0;
-    while (*p != '\0')
-    {
-        char longDriveName[MAX_PATH];
-        sprintf(
-                longDriveName,
-                "\\\\.\\%s",
-                p);
-        int size = strlen(longDriveName);
-        longDriveName[size - 1] = '\0';
-        g_drives[counter].longPath = StrDupA(longDriveName);
-        counter++;
-        p += strlen(p) + 1;
-    }
+/*     char* p = buffer; */
+/*     int counter = 0; */
+/*     while (*p != '\0') */
+/*     { */
+/*         char longDriveName[MAX_PATH]; */
+/*         sprintf( */
+/*                 longDriveName, */
+/*                 "\\\\.\\%s", */
+/*                 p); */
+/*         int size = strlen(longDriveName); */
+/*         longDriveName[size - 1] = '\0'; */
+/*         g_drives[counter].longPath = StrDupA(longDriveName); */
+/*         counter++; */
+/*         p += strlen(p) + 1; */
+/*     } */
 
-    g_numberOfDrives = counter;
-}
+/*     g_numberOfDrives = counter; */
+/* } */
 
-void populate_drive_io(void)
-{
-    for(int i = 0; i < 1; i++)
-    {
-        Drive drive = g_drives[i];
-        HANDLE dev = CreateFile(
-                g_drives[i].longPath,
-                FILE_READ_ATTRIBUTES,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                NULL,
-                OPEN_EXISTING,
-                0,
-                NULL);
+/* void populate_drive_io(void) */
+/* { */
+/*     for(int i = 0; i < 1; i++) */
+/*     { */
+/*         Drive drive = g_drives[i]; */
+/*         HANDLE dev = CreateFile( */
+/*                 g_drives[i].longPath, */
+/*                 FILE_READ_ATTRIBUTES, */
+/*                 FILE_SHARE_READ | FILE_SHARE_WRITE, */
+/*                 NULL, */
+/*                 OPEN_EXISTING, */
+/*                 0, */
+/*                 NULL); */
 
-        if (dev == INVALID_HANDLE_VALUE)
-        {
-            return;
-        }
+/*         if (dev == INVALID_HANDLE_VALUE) */
+/*         { */
+/*             return; */
+/*         } */
 
-        FILETIME now;
-        GetSystemTimeAsFileTime(&now);
-        unsigned __int64 systemTime = ConvertFileTimeToInt64(&now);
+/*         FILETIME now; */
+/*         GetSystemTimeAsFileTime(&now); */
+/*         unsigned __int64 systemTime = ConvertFileTimeToInt64(&now); */
 
-        DISK_PERFORMANCE disk_info;
-        DWORD bytes;
-        if (!DeviceIoControl(
-                    dev,
-                    IOCTL_DISK_PERFORMANCE,
-                    NULL,
-                    0,
-                    &disk_info,
-                    sizeof(disk_info),
-                    &bytes,
-                    NULL))
-        {
-            CloseHandle(dev);
-            return;
-        }
+/*         DISK_PERFORMANCE disk_info; */
+/*         DWORD bytes; */
+/*         if (!DeviceIoControl( */
+/*                     dev, */
+/*                     IOCTL_DISK_PERFORMANCE, */
+/*                     NULL, */
+/*                     0, */
+/*                     &disk_info, */
+/*                     sizeof(disk_info), */
+/*                     &bytes, */
+/*                     NULL)) */
+/*         { */
+/*             CloseHandle(dev); */
+/*             return; */
+/*         } */
 
-        CloseHandle(dev);
+/*         CloseHandle(dev); */
 
-        if(g_drives[i].lastBytesRead)
-        {
-            __int64 readDiff = disk_info.BytesRead.QuadPart - g_drives[i].lastBytesRead;
-            __int64 writeDiff = disk_info.BytesWritten.QuadPart - g_drives[i].lastBytesWritten;
-            __int64 timeDiff = systemTime - g_drives[i].lastSystemTime;
+/*         if(g_drives[i].lastBytesRead) */
+/*         { */
+/*             __int64 readDiff = disk_info.BytesRead.QuadPart - g_drives[i].lastBytesRead; */
+/*             __int64 writeDiff = disk_info.BytesWritten.QuadPart - g_drives[i].lastBytesWritten; */
+/*             __int64 timeDiff = systemTime - g_drives[i].lastSystemTime; */
 
-            float numberOfSecondsBetweenReadings = (float)timeDiff / (float)10000000;
+/*             float numberOfSecondsBetweenReadings = (float)timeDiff / (float)10000000; */
 
-            float readsPerSecond = readDiff / numberOfSecondsBetweenReadings;
-            float writesPerSecond = writeDiff / numberOfSecondsBetweenReadings;
+/*             float readsPerSecond = readDiff / numberOfSecondsBetweenReadings; */
+/*             float writesPerSecond = writeDiff / numberOfSecondsBetweenReadings; */
 
-            g_drives[i].readsPerSecond = readsPerSecond / 1024;
-            g_drives[i].writesPerSecond = writesPerSecond / 1024;
-        }
+/*             g_drives[i].readsPerSecond = readsPerSecond / 1024; */
+/*             g_drives[i].writesPerSecond = writesPerSecond / 1024; */
+/*         } */
 
-        g_drives[i].lastBytesRead = disk_info.BytesRead.QuadPart;
-        g_drives[i].lastBytesWritten = disk_info.BytesWritten.QuadPart;
-        g_drives[i].lastSystemTime = systemTime;
-    }
-}
+/*         g_drives[i].lastBytesRead = disk_info.BytesRead.QuadPart; */
+/*         g_drives[i].lastBytesWritten = disk_info.BytesWritten.QuadPart; */
+/*         g_drives[i].lastSystemTime = systemTime; */
+/*     } */
+/* } */
 
 BOOL populate_process_io(Process *process, ProcessIo *lastProcessIo, HANDLE processHandle)
 {
@@ -1608,7 +1608,7 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
         }
 
         CpuReading *reading = add_cpu_reading();
-        populate_drive_io();
+        /* populate_drive_io(); */
         EnterCriticalSection(&SyncLock);
         refreshsummary();
         paint_cpu_graph_window();
@@ -1931,7 +1931,7 @@ void draw_process_history(void)
 
     if(readingToShow)
     {
-        qsort(readingToShow->processes2, readingToShow->numberOfProcesses - 1, sizeof(Process*), CompareProcessForSort2);
+        qsort(readingToShow->processes, readingToShow->numberOfProcesses - 1, sizeof(Process*), CompareProcessForSort2);
         for(int i = 0; i < readingToShow->numberOfProcesses && i < maxItems; i++)
         {
             SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 1 + i);
@@ -1940,49 +1940,49 @@ void draw_process_history(void)
                     pidStr,
                     25,
                     "%08d",
-                    readingToShow->processes2[i]->pid);
+                    readingToShow->processes[i]->pid);
 
             char percentStr[25];
             sprintf_s(
                     percentStr,
                     25,
                     "%.1f",
-                    readingToShow->processes2[i]->cpuPercent);
+                    readingToShow->processes[i]->cpuPercent);
 
             char numberOfThreadsStr[25];
             sprintf_s(
                     numberOfThreadsStr,
                     25,
                     "%.1f",
-                    readingToShow->processes2[i]->numberOfThreads);
+                    readingToShow->processes[i]->numberOfThreads);
 
             char readsPerSecondStr[25];
             sprintf_s(
                     readsPerSecondStr,
                     25,
                     "%.1f",
-                    readingToShow->processes2[i]->ioReadsPerSecond);
+                    readingToShow->processes[i]->ioReadsPerSecond);
 
             char writesPerSecondStr[25];
             sprintf_s(
                     writesPerSecondStr,
                     25,
                     "%.1f",
-                    readingToShow->processes2[i]->ioWritesPerSecond);
+                    readingToShow->processes[i]->ioWritesPerSecond);
 
             TCHAR upTimeStr[MAX_PATH];
-            format_time(upTimeStr, readingToShow->processes2[i]->upTime);
+            format_time(upTimeStr, readingToShow->processes[i]->upTime);
 
             CHAR privateBytesFormatedStr[MAX_PATH];
-            FormatNumber(privateBytesFormatedStr, readingToShow->processes2[i]->privateBytes, &g_numFmt);
+            FormatNumber(privateBytesFormatedStr, readingToShow->processes[i]->privateBytes, &g_numFmt);
 
             CHAR workingSetFormatedStr[MAX_PATH];
-            FormatNumber(workingSetFormatedStr, readingToShow->processes2[i]->workingSet, &g_numFmt);
+            FormatNumber(workingSetFormatedStr, readingToShow->processes[i]->workingSet, &g_numFmt);
 
             DialogConPrintf(
                     "%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s",
                     timeWidth,
-                    readingToShow->processes2[i]->name,
+                    readingToShow->processes[i]->name,
                     columnWidth,
                     pidStr,
                     columnWidth,
@@ -2148,7 +2148,7 @@ int _tmain(int argc, TCHAR *argv[])
     UNREFERENCED_PARAMETER(argc);
     UNREFERENCED_PARAMETER(argv);
 
-    populate_drives();
+    /* populate_drives(); */
 
     sm_EnableTokenPrivilege(SE_DEBUG_NAME);
     InitializeCriticalSection(&SyncLock);
