@@ -2389,6 +2389,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     LeaveCriticalSection(&SyncLock);
                                     break;
                                 case '/':
+                                    EnterCriticalSection(&SyncLock);
                                     g_mode = Search;
                                     clear_screen();
                                     calcuate_layout();
