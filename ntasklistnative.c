@@ -2038,7 +2038,7 @@ void draw_help_window(void)
         { Plain, "l: show prcess readings" },
         { Plain, "" },
         { Header, "Search Mode" },
-        { Plain, "esc: normal mode" },
+        { Plain, "esc/enter: normal mode" },
     };
     draw_rect(&g_help_view_border_rect);
     clear_rect(&g_help_view_rect);
@@ -2436,6 +2436,7 @@ int _tmain(int argc, TCHAR *argv[])
                         {
                             switch(InputRecord.Event.KeyEvent.uChar.AsciiChar)
                             {
+                                case VK_RETURN:
                                 case VK_ESCAPE:
                                     EnterCriticalSection(&SyncLock);
                                     g_mode = Normal;
