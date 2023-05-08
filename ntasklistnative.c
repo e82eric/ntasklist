@@ -2005,15 +2005,25 @@ void draw_process_history(void)
 
 void draw_help_window(void)
 {
-    char lines[3][25] = {
+    char lines[13][25] = {
+        "Normal Mode:",
         "q: quit",
         "j: down",
-        "k: up"
+        "k: up",
+        "/: enter search mode",
+        ".: show reading history",
+        "",
+        "Reading History",
+        "esc: back to normal mode",
+        "l: show process readings",
+        "",
+        "Search Mode:",
+        "esc: back to normal mode"
     };
     draw_rect(&g_help_view_border_rect);
     clear_rect(&g_help_view_rect);
 
-    for(int i = 0; i < 3; i ++)
+    for(int i = 0; i < 13; i ++)
     {
         SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + i);
         DialogConPrintf(
