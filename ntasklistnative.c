@@ -21,6 +21,9 @@
 #define BACKGROUND_WHITE (BACKGROUND_RED | BACKGROUND_GREEN | BACKGROUND_BLUE)
 #define BACKGROUND_CYAN (BACKGROUND_INTENSITY | BACKGROUND_GREEN | BACKGROUND_BLUE)
 
+#define VK_J 0x4A
+#define VK_K 0x4B
+
 static SHORT Width;
 static SHORT Height;
 static SHORT OldHeight;
@@ -2371,25 +2374,6 @@ int _tmain(int argc, TCHAR *argv[])
                                 case 'q':
                                     return EXIT_SUCCESS;
                                     break;
-                                case 'j':
-                                    g_selectedIndex++; EnterCriticalSection(&SyncLock);
-                                    if(g_selectedIndex > 0)
-                                    {
-                                        print_process_at_index(g_selectedIndex - 1);
-                                    }
-                                    print_process_at_index(g_selectedIndex);
-                                    LeaveCriticalSection(&SyncLock);
-                                    break;
-                                case 'k':
-                                    EnterCriticalSection(&SyncLock);
-                                    if(g_selectedIndex > 0)
-                                    {
-                                        g_selectedIndex--;
-                                        print_process_at_index(g_selectedIndex + 1);
-                                        print_process_at_index(g_selectedIndex);
-                                    }
-                                    LeaveCriticalSection(&SyncLock);
-                                    break;
                                 case '/':
                                     EnterCriticalSection(&SyncLock);
                                     g_mode = Search;
@@ -2416,6 +2400,32 @@ int _tmain(int argc, TCHAR *argv[])
                                     g_searchString[0] = '\0';
                                     g_searchStringIndex = 0;
                                     draw_processes_window();
+                                    LeaveCriticalSection(&SyncLock);
+                                    break;
+                                default:
+                                    break;
+                            }
+                            switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
+                            {
+                                case VK_DOWN:
+                                case VK_J:
+                                    g_selectedIndex++; EnterCriticalSection(&SyncLock);
+                                    if(g_selectedIndex > 0)
+                                    {
+                                        print_process_at_index(g_selectedIndex - 1);
+                                    }
+                                    print_process_at_index(g_selectedIndex);
+                                    LeaveCriticalSection(&SyncLock);
+                                    break;
+                                case VK_K:
+                                case VK_UP:
+                                    EnterCriticalSection(&SyncLock);
+                                    if(g_selectedIndex > 0)
+                                    {
+                                        g_selectedIndex--;
+                                        print_process_at_index(g_selectedIndex + 1);
+                                        print_process_at_index(g_selectedIndex);
+                                    }
                                     LeaveCriticalSection(&SyncLock);
                                     break;
                                 default:
@@ -2464,12 +2474,14 @@ int _tmain(int argc, TCHAR *argv[])
                         {
                             switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
                             {
+                                case VK_J:
                                 case VK_DOWN:
                                     EnterCriticalSection(&SyncLock);
                                     g_selectedCpuReadingIndex++;
                                     draw_cpu_readings2();
                                     LeaveCriticalSection(&SyncLock);
                                     break;
+                                case VK_K:
                                 case VK_UP:
                                     EnterCriticalSection(&SyncLock);
                                     if(g_selectedCpuReadingIndex > 0)
