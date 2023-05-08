@@ -2023,12 +2023,15 @@ void draw_process_history(void)
 
 void draw_help_window(void)
 {
-    int numberOfLines = 14;
+    int numberOfLines = 17;
     TextLine textLines[MAX_PATH] = {
-        { Header, "Normal Mode:" },
+        { Header, "Navigation:" },
+        { Plain, "j/down arrow: down" },
+        { Plain, "k/up arrow: up" },
+        { Plain, "esc: normal mode" },
         { Plain, "q: quit" },
-        { Plain, "j: down" },
-        { Plain, "k: up" },
+        { Plain, "" },
+        { Header, "Normal Mode:" },
         { Plain, "/: search mode" },
         { Plain, ".: reading history" },
         { Plain, ",: clear filter" },
@@ -2265,6 +2268,16 @@ int _tmain(int argc, TCHAR *argv[])
                 {
                     if (InputRecord.Event.KeyEvent.bKeyDown)
                     {
+                        if(g_mode != Search)
+                        {
+                            switch(InputRecord.Event.KeyEvent.uChar.AsciiChar)
+                            {
+                                case 'q':
+                                    return EXIT_SUCCESS;
+                                    break;
+                            }
+                        }
+                        
                         if(InputRecord.Event.KeyEvent.wVirtualKeyCode == VK_CONTROL)
                         {
                             g_controlState = TRUE;
@@ -2371,9 +2384,6 @@ int _tmain(int argc, TCHAR *argv[])
                         {
                             switch(InputRecord.Event.KeyEvent.uChar.AsciiChar)
                             {
-                                case 'q':
-                                    return EXIT_SUCCESS;
-                                    break;
                                 case '/':
                                     EnterCriticalSection(&SyncLock);
                                     g_mode = Search;
