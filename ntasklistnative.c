@@ -1613,22 +1613,24 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
 
     while(1)
     {
+        EnterCriticalSection(&SyncLock);
+        CpuReading *reading = add_cpu_reading();
         if(g_mode == ProcessDetails)
         {
             Process process;
             populate_focused_process(&process);
             print_focused_process(&process);
         }
+        else
+        {
+            populate_processes(reading);
+            qsort(g_processes, g_numberOfProcesses, sizeof(Process*), CompareProcessForSort2);
+            print_processes();
+        }
 
-        CpuReading *reading = add_cpu_reading();
-        /* populate_drive_io(); */
-        EnterCriticalSection(&SyncLock);
         refreshsummary();
         paint_cpu_graph_window();
-        populate_processes(reading);
         paint_io_graph_window();
-        qsort(g_processes, g_numberOfProcesses, sizeof(Process*), CompareProcessForSort2);
-        print_processes();
         LeaveCriticalSection(&SyncLock);
 
         Sleep(1000);
