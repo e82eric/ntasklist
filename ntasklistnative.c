@@ -140,6 +140,7 @@ static HANDLE StatRefreshThread;
 int NUMBER_OF_CPU_READINGS;
 int NUMBER_OF_IO_READINGS;
 enum Mode g_mode = Normal;
+BOOL g_isFiltered;
 ULONGLONG g_upTime;
 CpuReading *g_cpuReadings;
 CpuReading *g_lastCpuReading;
@@ -2005,13 +2006,15 @@ void draw_process_history(void)
 
 void draw_help_window(void)
 {
-    char lines[13][25] = {
+    int numberOfLines = 14;
+    char lines[MAX_PATH][25] = {
         "Normal Mode:",
         "q: quit",
         "j: down",
         "k: up",
         "/: enter search mode",
         ".: show reading history",
+        ",: clear filter",
         "",
         "Reading History",
         "esc: back to normal mode",
@@ -2023,7 +2026,7 @@ void draw_help_window(void)
     draw_rect(&g_help_view_border_rect);
     clear_rect(&g_help_view_rect);
 
-    for(int i = 0; i < 13; i ++)
+    for(int i = 0; i < numberOfLines; i ++)
     {
         SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + i);
         DialogConPrintf(
@@ -2385,6 +2388,13 @@ int _tmain(int argc, TCHAR *argv[])
                                     draw_cpu_readings();
                                     g_mode = ReadingsList;
                                     break;
+                                case ',':
+                                    EnterCriticalSection(&SyncLock);
+                                    g_searchString[0] = '\0';
+                                    g_searchStringIndex = 0;
+                                    draw_processes_window();
+                                    LeaveCriticalSection(&SyncLock);
+                                    break;
                                 default:
                                     break;
                             }
@@ -2396,8 +2406,6 @@ int _tmain(int argc, TCHAR *argv[])
                                 case VK_ESCAPE:
                                     EnterCriticalSection(&SyncLock);
                                     g_mode = Normal;
-                                    g_searchString[0] = '\0';
-                                    g_searchStringIndex = 0;
                                     clear_screen();
                                     calcuate_layout();
                                     paint_cpu_graph_window();
