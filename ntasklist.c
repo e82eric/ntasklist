@@ -49,6 +49,14 @@ struct Drive
     float writesPerSecond;
 };
 
+typedef struct ShortRect
+{
+    SHORT left;
+    SHORT top;
+    SHORT right;
+    SHORT bottom;
+} ShortRect;
+
 typedef struct Process Process;
 struct Process
 {
@@ -175,7 +183,7 @@ DWORD g_focusedProcessPid;
 IoReading *g_ioReadings;
 IoReading *g_lastIoReading;
 int g_ioReadingIndex;
-int g_largestIoReading;
+float g_largestIoReading;
 
 int g_numberOfDrives;
 /* Drive g_drives[MAX_PATH]; */
@@ -252,8 +260,8 @@ SHORT g_processes_view_x = 4;
 SHORT g_processes_view_y = 2;
 SHORT g_processes_view_number_of_display_lines;
 
-RECT g_help_view_border_rect;
-RECT g_help_view_rect;
+ShortRect g_help_view_border_rect;
+ShortRect g_help_view_rect;
 
 int g_nameWidth = 0;
 
@@ -351,7 +359,7 @@ static void ConPutc(char c)
     WriteConsole(ConsoleHandle, &c, 1, &Dummy, 0);
 }
 
-BOOL is_inside_vertical_of_rect(COORD *coord, RECT *rect)
+BOOL is_inside_vertical_of_rect(COORD *coord, ShortRect *rect)
 {
     if(coord->Y >= rect->top)
     {
@@ -364,7 +372,7 @@ BOOL is_inside_vertical_of_rect(COORD *coord, RECT *rect)
     return FALSE;
 }
 
-BOOL is_inside_rect(COORD *coord, RECT *rect)
+BOOL is_inside_rect(COORD *coord, ShortRect *rect)
 {
     if(is_inside_vertical_of_rect(coord, rect))
     {
@@ -413,19 +421,19 @@ void draw_box(SHORT top, SHORT bottom, SHORT left, SHORT width)
     ConPutc(217);
 }
 
-void draw_rect(RECT *rect)
+void draw_rect(ShortRect *rect)
 {
-    draw_box((SHORT)rect->top, (SHORT)rect->bottom, (SHORT)rect->left, (SHORT)rect->right - (SHORT)rect->left);
+    draw_box(rect->top, rect->bottom, rect->left, rect->right - rect->left);
 }
 
-void clear_rect(RECT *rect)
+void clear_rect(ShortRect *rect)
 {
     DWORD cCharsWritten;
-    SHORT numberOfLines = (SHORT)rect->bottom - (SHORT)rect->top + 1;
-    SHORT width = (SHORT)rect->right - (SHORT)rect->left;
+    SHORT numberOfLines = rect->bottom - rect->top + 1;
+    SHORT width = rect->right - rect->left;
     for(SHORT i = 0; i < numberOfLines; i++)
     {
-        COORD coordScreen = { (SHORT)rect->left, (SHORT)rect->top + i };
+        COORD coordScreen = { rect->left, rect->top + i };
         FillConsoleOutputAttribute(ConsoleHandle,
                 FOREGROUND_INTENSITY,
                 width,
@@ -566,7 +574,7 @@ BOOL FileTimeToString(const FILETIME* pFileTime, LPSTR lpString, int cchString)
     ULONGLONG remainingMinutes = minutes % 60;
     ULONGLONG remainingSeconds = seconds % 60;
 
-    wsprintf(lpString, _T("%02d:%02d:%02d:%02d"), days, remainingHours, remainingMinutes, remainingSeconds);
+    wnsprintf(lpString, cchString, _T("%02d:%02d:%02d:%02d"), days, remainingHours, remainingMinutes, remainingSeconds);
 
     return 0;
 }
@@ -767,11 +775,19 @@ CpuReading *add_cpu_reading(void)
 void paint_graph_axis_markers(SHORT areaLeft, SHORT areaBottom)
 {
     CHAR ioAxisStr[MAX_PATH];
-    FormatNumber(ioAxisStr, g_largestIoReading + 1000, &g_numFmt);
+    sprintf_s(
+            ioAxisStr,
+            25,
+            "%-8.1f",
+            g_largestIoReading + 1000);
     SetConCursorPos(g_io_graph_axis_left, g_io_graph_top);
 
     CHAR maxStr[MAX_PATH];
-    FormatNumber(maxStr, g_largestIoReading, &g_numFmt);
+    sprintf_s(
+            maxStr,
+            25,
+            "%-8.1f",
+            g_largestIoReading);
     ConPrintf("(y) %s  (max) %s", ioAxisStr, maxStr);
 
     for(SHORT i = 0; i < 10; i++)
@@ -828,7 +844,7 @@ void paint_cpu_graph_window()
 {
     SHORT width = g_cpu_graph_border_right - g_cpu_graph_border_left;
     SHORT middle = width / 2;
-    SHORT middleOfHeader = strlen(" CPU ") / 2;
+    SHORT middleOfHeader = (SHORT)strlen(" CPU ") / 2;
     SHORT headerLeft = middle - middleOfHeader;
 
     SetConCursorPos(g_cpu_graph_border_left + headerLeft, g_cpu_graph_border_top);
@@ -849,7 +865,7 @@ void paint_io_graph_window()
 {
     SHORT width = g_io_graph_border_right - g_io_graph_border_left;
     SHORT middle = width / 2;
-    SHORT middleOfHeader = strlen(" IO ") / 2;
+    SHORT middleOfHeader = (SHORT)strlen(" IO ") / 2;
     SHORT headerLeft = middle - middleOfHeader;
 
     SetConCursorPos(g_io_graph_border_left + headerLeft, g_io_graph_border_top);
@@ -861,8 +877,8 @@ void paint_io_graph_window()
     IoReading *currentReading = g_ioReadings;
     while(currentReading)
     {
-        float value = (currentReading->readsPerSecond / (g_largestIoReading + 1000)) * 100;
-        paint_graph_column2(g_io_graph_left + 1, g_io_graph_bottom, readingIndex, value);
+        SHORT value = (SHORT)((currentReading->readsPerSecond / (g_largestIoReading + 1000)) * 100);
+        paint_graph_column2(g_io_graph_left + (SHORT)1, g_io_graph_bottom, readingIndex, value);
         currentReading = currentReading->next;
         readingIndex++;
     }
@@ -1433,7 +1449,7 @@ void print_focused_process(Process *process)
 
     FILETIME creationTime, exitTime, kernelTime, userTime;
     CHAR lpImageFileName[MAX_PATH];
-    PROCESS_MEMORY_COUNTERS_EX pmc;
+    PROCESS_MEMORY_COUNTERS_EX pmc = {0};
     HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, process->pid);
     PSAPI_WORKING_SET_EX_INFORMATION wsInfo = { 0 };
     if(hProcess)
@@ -1443,7 +1459,7 @@ void print_focused_process(Process *process)
                 hProcess,
                 lpImageFileName,
                 MAX_PATH);
-        GetProcessMemoryInfo(hProcess, &pmc, sizeof(pmc));
+        GetProcessMemoryInfo(hProcess, (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
         QueryWorkingSetEx(hProcess, &wsInfo, sizeof(wsInfo));
     }
 
@@ -1745,7 +1761,7 @@ void calcuate_layout(void)
     g_nameWidth = g_processes_view_right - g_processes_view_left - nonNameWidth;
 }
 
-void print_cpu_reading_at_index(CpuReading *reading, int index)
+void print_cpu_reading_at_index(CpuReading *reading, SHORT index)
 {
     int columnWidth = 12;
     int windowWidth = g_help_view_rect.right - g_help_view_rect.left - 1;
@@ -1794,14 +1810,14 @@ void print_cpu_reading_at_index(CpuReading *reading, int index)
     sprintf_s(
             numProcessStr,
             25,
-            "%-8.1f",
+            "%-8d",
             reading->numberOfProcesses);
 
     char numberOfThreadsStr[25];
     sprintf_s(
             numberOfThreadsStr,
             25,
-            "%-8.1f",
+            "%-8d",
             reading->numberOfThreads);
 
     char readsPerSecondStr[25];
@@ -1818,7 +1834,7 @@ void print_cpu_reading_at_index(CpuReading *reading, int index)
             "%-8.1f",
             reading->writesPerSecond);
 
-    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + index + 1);
+    SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + index + (SHORT)1);
     DialogConPrintf(
             "%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s%-*s",
             timeWidth,
@@ -1847,7 +1863,7 @@ void draw_cpu_readings2(void)
     SHORT maxLines = g_help_view_rect.bottom - g_help_view_rect.top - 1;
 
     CpuReading *current = g_lastDisplayCpuReading;
-    int i = 0;
+    SHORT i = 0;
     while(current && i <= maxLines)
     {
         print_cpu_reading_at_index(current, i);
@@ -1935,7 +1951,7 @@ void draw_process_history(void)
 
     int j = 0;
     CpuReading *current = g_cpuReadings;
-    CpuReading *readingToShow;
+    CpuReading *readingToShow = NULL;
     while(current)
     {
         if(j == g_selectedCpuReadingIndex)
@@ -1950,9 +1966,9 @@ void draw_process_history(void)
     if(readingToShow)
     {
         qsort(readingToShow->processes, readingToShow->numberOfProcesses - 1, sizeof(Process*), CompareProcessForSort2);
-        for(int i = 0; i < readingToShow->numberOfProcesses && i < maxItems; i++)
+        for(SHORT i = 0; i < readingToShow->numberOfProcesses && i < maxItems; i++)
         {
-            SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + 1 + i);
+            SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + (SHORT)1 + i);
             char pidStr[25];
             sprintf_s(
                     pidStr,
@@ -1971,7 +1987,7 @@ void draw_process_history(void)
             sprintf_s(
                     numberOfThreadsStr,
                     25,
-                    "%.1f",
+                    "%.1d",
                     readingToShow->processes[i]->numberOfThreads);
 
             char readsPerSecondStr[25];
@@ -2046,7 +2062,7 @@ void draw_help_window(void)
     draw_rect(&g_help_view_border_rect);
     clear_rect(&g_help_view_rect);
 
-    for(int i = 0; i < numberOfLines; i ++)
+    for(SHORT i = 0; i < numberOfLines; i ++)
     {
         if(textLines[i].lineType == Header)
         {
