@@ -184,6 +184,7 @@ IoReading *g_ioReadings;
 IoReading *g_lastIoReading;
 int g_ioReadingIndex;
 float g_largestIoReading;
+SHORT g_largestCpuReading;
 
 int g_numberOfDrives;
 /* Drive g_drives[MAX_PATH]; */
@@ -769,25 +770,30 @@ CpuReading *add_cpu_reading(void)
         result->processes[i] = g_processes[i];
     }
 
+    if(result->value > g_largestCpuReading)
+    {
+        g_largestCpuReading = result->value;
+    }
+
     return result;
 }
 
-void paint_graph_axis_markers(SHORT areaLeft, SHORT areaBottom)
+void paint_graph_axis_markers(SHORT areaLeft, SHORT areaBottom, SHORT axisLeft, SHORT axisTop, float maxValue, float axisMax)
 {
     CHAR ioAxisStr[MAX_PATH];
     sprintf_s(
             ioAxisStr,
             25,
             "%-8.1f",
-            g_largestIoReading + 1000);
-    SetConCursorPos(g_io_graph_axis_left, g_io_graph_top);
+            axisMax);
+    SetConCursorPos(axisLeft, axisTop);
 
     CHAR maxStr[MAX_PATH];
     sprintf_s(
             maxStr,
             25,
             "%-8.1f",
-            g_largestIoReading);
+            maxValue);
     ConPrintf("(y) %s  (max) %s", ioAxisStr, maxStr);
 
     for(SHORT i = 0; i < 10; i++)
@@ -849,7 +855,7 @@ void paint_cpu_graph_window()
 
     SetConCursorPos(g_cpu_graph_border_left + headerLeft, g_cpu_graph_border_top);
     ConPrintf(" %s ", "CPU");
-    paint_graph_axis_markers(g_cpu_graph_border_left + 1, g_cpu_graph_bottom);
+    paint_graph_axis_markers(g_cpu_graph_border_left + 1, g_cpu_graph_bottom, g_cpu_graph_axis_left, g_cpu_graph_top, g_largestCpuReading, 100);
     SHORT readingIndex = 0;
 
     CpuReading *currentReading = g_cpuReadings;
@@ -871,7 +877,7 @@ void paint_io_graph_window()
     SetConCursorPos(g_io_graph_border_left + headerLeft, g_io_graph_border_top);
     ConPrintf(" %s ", "IO");
 
-    paint_graph_axis_markers(g_io_graph_left, g_io_graph_bottom);
+    paint_graph_axis_markers(g_io_graph_left, g_io_graph_bottom, g_io_graph_axis_left, g_io_graph_top, g_largestIoReading, g_largestIoReading + 1000);
     SHORT readingIndex = 0;
 
     IoReading *currentReading = g_ioReadings;
