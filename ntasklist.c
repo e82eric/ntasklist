@@ -113,6 +113,13 @@ struct IoReading
     IoReading *next;
 };
 
+typedef struct MemoryReading MemoryReading;
+struct MemoryReading
+{
+    DWORD value;
+    MemoryReading *next;
+};
+
 typedef struct ProcessTime
 {
     DWORD pid;
@@ -162,6 +169,7 @@ static CRITICAL_SECTION SyncLock;
 static HANDLE StatRefreshThread;
 int NUMBER_OF_CPU_READINGS;
 int NUMBER_OF_IO_READINGS;
+int NUMBER_OF_MEMORY_READINGS;
 enum Mode g_mode = Normal;
 BOOL g_isFiltered;
 ULONGLONG g_upTime;
@@ -185,6 +193,11 @@ IoReading *g_lastIoReading;
 int g_ioReadingIndex;
 float g_largestIoReading;
 SHORT g_largestCpuReading;
+
+MemoryReading *g_memoryReadings;
+MemoryReading *g_lastMemoryReading;
+int g_memoryReadingIndex;
+DWORD g_largestMemoryReading;
 
 int g_numberOfDrives;
 /* Drive g_drives[MAX_PATH]; */
@@ -233,6 +246,17 @@ SHORT g_io_graph_bottom;
 SHORT g_io_graph_left;
 SHORT g_io_graph_right;
 SHORT g_io_graph_axis_left;
+
+SHORT g_memory_graph_border_top;
+SHORT g_memory_graph_border_bottom;
+SHORT g_memory_graph_border_left;
+SHORT g_memory_graph_border_right;
+
+SHORT g_memory_graph_top;
+SHORT g_memory_graph_bottom;
+SHORT g_memory_graph_left;
+SHORT g_memory_graph_right;
+SHORT g_memory_graph_axis_left;
 
 SHORT g_search_view_border_top;
 SHORT g_search_view_border_bottom;
@@ -722,6 +746,46 @@ void add_io_reading(float reads, float writes)
     }
 }
 
+void add_memory_reading()
+{
+    MEMORYSTATUSEX statex;
+    statex.dwLength = sizeof (statex);
+    GlobalMemoryStatusEx (&statex);
+
+    DWORD value = statex.dwMemoryLoad;
+
+    if(!g_memoryReadings)
+    {
+        g_memoryReadings = calloc(1, sizeof(MemoryReading));
+        g_memoryReadings->value = value;
+        g_lastMemoryReading = g_memoryReadings;
+        g_memoryReadingIndex = 1;
+    }
+    else
+    {
+        MemoryReading *memoryReading = calloc(1, sizeof(MemoryReading));
+        memoryReading->value = value;
+        g_lastMemoryReading->next = memoryReading;
+        g_lastMemoryReading = memoryReading;
+
+        if(g_memoryReadingIndex >= NUMBER_OF_MEMORY_READINGS - 1)
+        {
+            MemoryReading *firstReading = g_memoryReadings;
+            g_memoryReadings = firstReading->next;
+            free(firstReading);
+        }
+        else
+        {
+            g_memoryReadingIndex++;
+        }
+    }
+
+    if(value > g_largestMemoryReading)
+    {
+        g_largestMemoryReading = value;
+    }
+}
+
 CpuReading *add_cpu_reading(void)
 {
     CpuReading *result;
@@ -885,6 +949,28 @@ void paint_io_graph_window()
     {
         SHORT value = (SHORT)((currentReading->readsPerSecond / (g_largestIoReading + 1000)) * 100);
         paint_graph_column2(g_io_graph_left + (SHORT)1, g_io_graph_bottom, readingIndex, value);
+        currentReading = currentReading->next;
+        readingIndex++;
+    }
+}
+
+void paint_memory_graph_window()
+{
+    SHORT width = g_memory_graph_border_right - g_memory_graph_border_left;
+    SHORT middle = width / 2;
+    SHORT middleOfHeader = (SHORT)strlen(" memory ") / 2;
+    SHORT headerLeft = middle - middleOfHeader;
+
+    SetConCursorPos(g_memory_graph_border_left + headerLeft, g_memory_graph_border_top);
+    ConPrintf(" %s ", "memory");
+
+    paint_graph_axis_markers(g_memory_graph_left, g_memory_graph_bottom, g_memory_graph_axis_left, g_memory_graph_top, g_largestMemoryReading, 100);
+    SHORT readingIndex = 0;
+
+    MemoryReading *currentReading = g_memoryReadings;
+    while(currentReading)
+    {
+        paint_graph_column2(g_memory_graph_left + (SHORT)1, g_memory_graph_bottom, readingIndex, currentReading->value);
         currentReading = currentReading->next;
         readingIndex++;
     }
@@ -1639,6 +1725,7 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
     while(1)
     {
         EnterCriticalSection(&SyncLock);
+        add_memory_reading();
         CpuReading *reading = add_cpu_reading();
         if(g_mode == ProcessDetails)
         {
@@ -1656,6 +1743,7 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
         refreshsummary();
         paint_cpu_graph_window();
         paint_io_graph_window();
+        paint_memory_graph_window();
         LeaveCriticalSection(&SyncLock);
 
         Sleep(1000);
@@ -1685,7 +1773,7 @@ void calcuate_layout(void)
 
     g_cpu_graph_border_top = g_summary_view_border_top;
     g_cpu_graph_border_bottom = g_summary_view_border_bottom;
-    g_cpu_graph_border_right = (graphsWidth / 2) + 30;
+    g_cpu_graph_border_right = (graphsWidth / 3) + 30;
 
     g_cpu_graph_axis_left = g_cpu_graph_border_left + 1;
 
@@ -1699,7 +1787,7 @@ void calcuate_layout(void)
     g_io_graph_border_top = g_summary_view_border_top;
     g_io_graph_border_bottom = g_summary_view_border_bottom;
     g_io_graph_border_left = g_cpu_graph_border_right;
-    g_io_graph_border_right = g_summary_view_border_right;
+    g_io_graph_border_right = g_io_graph_border_left + (graphsWidth / 3);
 
     g_io_graph_axis_left = g_io_graph_border_left + 1;
 
@@ -1709,6 +1797,20 @@ void calcuate_layout(void)
     g_io_graph_right = g_io_graph_border_right - 1;
 
     NUMBER_OF_IO_READINGS = g_io_graph_right - g_io_graph_axis_left - 2;
+
+    g_memory_graph_border_top = g_summary_view_border_top;
+    g_memory_graph_border_bottom = g_summary_view_border_bottom;
+    g_memory_graph_border_left = g_io_graph_border_right;
+    g_memory_graph_border_right = g_summary_view_border_right;
+
+    g_memory_graph_axis_left = g_memory_graph_border_left + 1;
+
+    g_memory_graph_top = g_summary_view_top;
+    g_memory_graph_bottom = g_memory_graph_border_bottom - 1;
+    g_memory_graph_left = g_memory_graph_axis_left + 1;
+    g_memory_graph_right = g_memory_graph_border_right - 1;
+
+    NUMBER_OF_MEMORY_READINGS = g_memory_graph_right - g_memory_graph_axis_left - 2;
 
     if(g_mode == Search)
     {
@@ -2111,6 +2213,7 @@ void draw_summary_window(void)
     draw_box(g_summary_view_border_top, g_summary_view_border_bottom, g_summary_view_border_left, g_summary_view_border_right);
     draw_box(g_cpu_graph_border_top, g_cpu_graph_border_bottom, g_cpu_graph_border_left, g_cpu_graph_border_right - g_cpu_graph_border_left);
     draw_box(g_io_graph_border_top, g_io_graph_border_bottom, g_io_graph_border_left, g_io_graph_border_right - g_io_graph_border_left);
+    draw_box(g_memory_graph_border_top, g_memory_graph_border_bottom, g_memory_graph_border_left, g_memory_graph_border_right - g_memory_graph_border_left);
 
     refreshsummary();
 }
