@@ -918,7 +918,7 @@ void paint_cpu_graph_window()
     SHORT headerLeft = middle - middleOfHeader;
 
     SetConCursorPos(g_cpu_graph_border_left + headerLeft, g_cpu_graph_border_top);
-    ConPrintf(" %s ", "CPU");
+    ConPrintf(" %s ", "CPU (%)");
     paint_graph_axis_markers(g_cpu_graph_border_left + 1, g_cpu_graph_bottom, g_cpu_graph_axis_left, g_cpu_graph_top, g_largestCpuReading, 100);
     SHORT readingIndex = 0;
 
@@ -962,7 +962,7 @@ void paint_memory_graph_window()
     SHORT headerLeft = middle - middleOfHeader;
 
     SetConCursorPos(g_memory_graph_border_left + headerLeft, g_memory_graph_border_top);
-    ConPrintf(" %s ", "memory");
+    ConPrintf(" %s ", "Mem (%)");
 
     paint_graph_axis_markers(g_memory_graph_left, g_memory_graph_bottom, g_memory_graph_axis_left, g_memory_graph_top, g_largestMemoryReading, 100);
     SHORT readingIndex = 0;
