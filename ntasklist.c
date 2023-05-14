@@ -71,7 +71,6 @@ struct Process
     unsigned __int64 upTime;
     unsigned __int64 cpuSystemTime;
     unsigned __int64 cpuProcessTime;
-    /* unsigned __int64 cpuKernelTime; */
     FILETIME cpuKernelTime;
     unsigned __int64 cpuUserTime;
     unsigned __int64 ioSystemTime;
@@ -99,7 +98,6 @@ struct CpuReading
     ULONGLONG usr;
     CpuReading *next;
     CpuReading *previous;
-    /* Process *processes; */
     Process **processes;
     Process *lastProcess;
     int processArraySize;
@@ -1081,96 +1079,6 @@ void refreshsummary()
                 g_lastIoReading->writesPerSecond);
     }
 }
-
-/* void populate_drives(void) */
-/* { */
-/*     char buffer[MAX_PATH]; */
-/*     DWORD length = GetLogicalDriveStringsA(sizeof(buffer) - 1, buffer); */
-/*     if (length == 0) { */
-/*         printf("Error getting drive strings.\n"); */
-/*         return 1; */
-/*     } */
-
-/*     char* p = buffer; */
-/*     int counter = 0; */
-/*     while (*p != '\0') */
-/*     { */
-/*         char longDriveName[MAX_PATH]; */
-/*         sprintf( */
-/*                 longDriveName, */
-/*                 "\\\\.\\%s", */
-/*                 p); */
-/*         int size = strlen(longDriveName); */
-/*         longDriveName[size - 1] = '\0'; */
-/*         g_drives[counter].longPath = StrDupA(longDriveName); */
-/*         counter++; */
-/*         p += strlen(p) + 1; */
-/*     } */
-
-/*     g_numberOfDrives = counter; */
-/* } */
-
-/* void populate_drive_io(void) */
-/* { */
-/*     for(int i = 0; i < 1; i++) */
-/*     { */
-/*         Drive drive = g_drives[i]; */
-/*         HANDLE dev = CreateFile( */
-/*                 g_drives[i].longPath, */
-/*                 FILE_READ_ATTRIBUTES, */
-/*                 FILE_SHARE_READ | FILE_SHARE_WRITE, */
-/*                 NULL, */
-/*                 OPEN_EXISTING, */
-/*                 0, */
-/*                 NULL); */
-
-/*         if (dev == INVALID_HANDLE_VALUE) */
-/*         { */
-/*             return; */
-/*         } */
-
-/*         FILETIME now; */
-/*         GetSystemTimeAsFileTime(&now); */
-/*         unsigned __int64 systemTime = ConvertFileTimeToInt64(&now); */
-
-/*         DISK_PERFORMANCE disk_info; */
-/*         DWORD bytes; */
-/*         if (!DeviceIoControl( */
-/*                     dev, */
-/*                     IOCTL_DISK_PERFORMANCE, */
-/*                     NULL, */
-/*                     0, */
-/*                     &disk_info, */
-/*                     sizeof(disk_info), */
-/*                     &bytes, */
-/*                     NULL)) */
-/*         { */
-/*             CloseHandle(dev); */
-/*             return; */
-/*         } */
-
-/*         CloseHandle(dev); */
-
-/*         if(g_drives[i].lastBytesRead) */
-/*         { */
-/*             __int64 readDiff = disk_info.BytesRead.QuadPart - g_drives[i].lastBytesRead; */
-/*             __int64 writeDiff = disk_info.BytesWritten.QuadPart - g_drives[i].lastBytesWritten; */
-/*             __int64 timeDiff = systemTime - g_drives[i].lastSystemTime; */
-
-/*             float numberOfSecondsBetweenReadings = (float)timeDiff / (float)10000000; */
-
-/*             float readsPerSecond = readDiff / numberOfSecondsBetweenReadings; */
-/*             float writesPerSecond = writeDiff / numberOfSecondsBetweenReadings; */
-
-/*             g_drives[i].readsPerSecond = readsPerSecond / 1024; */
-/*             g_drives[i].writesPerSecond = writesPerSecond / 1024; */
-/*         } */
-
-/*         g_drives[i].lastBytesRead = disk_info.BytesRead.QuadPart; */
-/*         g_drives[i].lastBytesWritten = disk_info.BytesWritten.QuadPart; */
-/*         g_drives[i].lastSystemTime = systemTime; */
-/*     } */
-/* } */
 
 BOOL populate_process_io(Process *process, ProcessIo *lastProcessIo, HANDLE processHandle)
 {
@@ -2158,7 +2066,11 @@ void draw_help_window(void)
         { Header, "Normal Mode:" },
         { Plain, "/: search mode" },
         { Plain, ".: reading history" },
-        { Plain, ",: clear filter" },
+        { Plain, "F1: Sort process list by Name" },
+        { Plain, "F2: Sort process list by Private Bytes" },
+        { Plain, "F3: Sort process list by Working Set" },
+        { Plain, "F4: Sort process list by PID" },
+        { Plain, "F5: Sort process list by CPU" },
         { Plain, "" },
         { Header, "Reading History" },
         { Plain, "esc: normal mode" },
@@ -2313,8 +2225,6 @@ int _tmain(int argc, TCHAR *argv[])
 {
     UNREFERENCED_PARAMETER(argc);
     UNREFERENCED_PARAMETER(argv);
-
-    /* populate_drives(); */
 
     sm_EnableTokenPrivilege(SE_DEBUG_NAME);
     InitializeCriticalSection(&SyncLock);
