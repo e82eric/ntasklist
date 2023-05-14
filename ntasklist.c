@@ -818,6 +818,8 @@ CpuReading *add_cpu_reading(void)
 
             free(firstReading->processes);
             free(firstReading);
+
+            g_cpuReadings->previous = NULL;
         }
         else
         {
@@ -2437,8 +2439,10 @@ int _tmain(int argc, TCHAR *argv[])
                                     g_mode = Help;
                                     break;
                                 case '.':
+                                    EnterCriticalSection(&SyncLock);
                                     draw_cpu_readings();
                                     g_mode = ReadingsList;
+                                    LeaveCriticalSection(&SyncLock);
                                     break;
                                 case ',':
                                     EnterCriticalSection(&SyncLock);
