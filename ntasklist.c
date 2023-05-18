@@ -867,7 +867,7 @@ void paint_graph_axis_markers(SHORT areaLeft, SHORT areaBottom, SHORT axisLeft, 
     }
 }
 
-void paint_graph_column2(SHORT areaLeft, SHORT areaBottom, SHORT readingNumber, SHORT value)
+void paint_graph_column(SHORT areaLeft, SHORT areaBottom, SHORT readingNumber, SHORT value)
 {
     SetColor(FOREGROUND_INTENSITY);
     WCHAR lowerEigth = { 0x2581 };
@@ -925,7 +925,7 @@ void paint_cpu_graph_window()
     CpuReading *currentReading = g_cpuReadings;
     while(currentReading)
     {
-        paint_graph_column2(g_cpu_graph_left, g_cpu_graph_bottom, readingIndex, currentReading->value);
+        paint_graph_column(g_cpu_graph_left, g_cpu_graph_bottom, readingIndex, currentReading->value);
         currentReading = currentReading->next;
         readingIndex++;
     }
@@ -948,7 +948,7 @@ void paint_io_graph_window()
     while(currentReading)
     {
         SHORT value = (SHORT)((currentReading->readsPerSecond / (g_largestIoReading + 1000)) * 100);
-        paint_graph_column2(g_io_graph_left + (SHORT)1, g_io_graph_bottom, readingIndex, value);
+        paint_graph_column(g_io_graph_left + (SHORT)1, g_io_graph_bottom, readingIndex, value);
         currentReading = currentReading->next;
         readingIndex++;
     }
@@ -970,7 +970,7 @@ void paint_memory_graph_window()
     MemoryReading *currentReading = g_memoryReadings;
     while(currentReading)
     {
-        paint_graph_column2(g_memory_graph_left + (SHORT)1, g_memory_graph_bottom, readingIndex, currentReading->value);
+        paint_graph_column(g_memory_graph_left + (SHORT)1, g_memory_graph_bottom, readingIndex, currentReading->value);
         currentReading = currentReading->next;
         readingIndex++;
     }
@@ -1188,7 +1188,7 @@ void populate_process_from_pid(Process *process, HANDLE hProcess)
     process->workingSet = pmc.WorkingSetSize / 1024;
 }
 
-int CompareProcessForSort2(const void *a, const void *b)
+int CompareProcessForSort(const void *a, const void *b)
 {
     Process *processA = *(Process **)a;
     Process *processB = *(Process **)b;
@@ -1646,7 +1646,7 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
         else
         {
             populate_processes(reading);
-            qsort(g_processes, g_numberOfProcesses, sizeof(Process*), CompareProcessForSort2);
+            qsort(g_processes, g_numberOfProcesses, sizeof(Process*), CompareProcessForSort);
             print_processes();
         }
 
@@ -1876,7 +1876,7 @@ void print_cpu_reading_at_index(CpuReading *reading, SHORT index)
     reading = reading->next;
 }
 
-void draw_cpu_readings2(void)
+void draw_cpu_readings(void)
 {
     SHORT maxLines = g_help_view_rect.bottom - g_help_view_rect.top - 1;
 
@@ -1891,7 +1891,7 @@ void draw_cpu_readings2(void)
     SetColor(FOREGROUND_INTENSITY);
 }
 
-void draw_cpu_readings(void)
+void update_and_draw_cpu_readings(void)
 {
     int columnWidth = 12;
     int windowWidth = g_help_view_rect.right - g_help_view_rect.left - 1;
@@ -1926,7 +1926,7 @@ void draw_cpu_readings(void)
             columnWidth,
             "Writes");
     SetColor(FOREGROUND_INTENSITY);
-    draw_cpu_readings2();
+    draw_cpu_readings();
 }
 
 void draw_process_history(void)
@@ -1983,7 +1983,7 @@ void draw_process_history(void)
 
     if(readingToShow)
     {
-        qsort(readingToShow->processes, readingToShow->numberOfProcesses - 1, sizeof(Process*), CompareProcessForSort2);
+        qsort(readingToShow->processes, readingToShow->numberOfProcesses - 1, sizeof(Process*), CompareProcessForSort);
         for(SHORT i = 0; i < readingToShow->numberOfProcesses && i < maxItems; i++)
         {
             SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + (SHORT)1 + i);
@@ -2440,7 +2440,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     break;
                                 case '.':
                                     EnterCriticalSection(&SyncLock);
-                                    draw_cpu_readings();
+                                    update_and_draw_cpu_readings();
                                     g_mode = ReadingsList;
                                     LeaveCriticalSection(&SyncLock);
                                     break;
@@ -2528,7 +2528,7 @@ int _tmain(int argc, TCHAR *argv[])
                                 case VK_DOWN:
                                     EnterCriticalSection(&SyncLock);
                                     g_selectedCpuReadingIndex++;
-                                    draw_cpu_readings2();
+                                    draw_cpu_readings();
                                     LeaveCriticalSection(&SyncLock);
                                     break;
                                 case VK_K:
@@ -2537,7 +2537,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     if(g_selectedCpuReadingIndex > 0)
                                     {
                                         g_selectedCpuReadingIndex--;
-                                        draw_cpu_readings2();
+                                        draw_cpu_readings();
                                     }
                                     LeaveCriticalSection(&SyncLock);
                                     break;
