@@ -2458,12 +2458,16 @@ int _tmain(int argc, TCHAR *argv[])
                             {
                                 case VK_DOWN:
                                 case VK_J:
-                                    g_selectedIndex++; EnterCriticalSection(&SyncLock);
-                                    if(g_selectedIndex > 0)
+                                    EnterCriticalSection(&SyncLock);
+                                    if(g_selectedIndex < g_processes_view_number_of_display_lines - 1)
                                     {
-                                        print_process_at_index(g_selectedIndex - 1);
+                                        g_selectedIndex++;
+                                        if(g_selectedIndex > 0)
+                                        {
+                                            print_process_at_index(g_selectedIndex - 1);
+                                        }
+                                        print_process_at_index(g_selectedIndex);
                                     }
-                                    print_process_at_index(g_selectedIndex);
                                     LeaveCriticalSection(&SyncLock);
                                     break;
                                 case VK_K:
