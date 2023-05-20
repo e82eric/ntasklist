@@ -2225,6 +2225,33 @@ static BOOL PollConsoleInfo(void)
     return FALSE;
 }
 
+void process_list_select_next()
+{
+    EnterCriticalSection(&SyncLock);
+    if(g_selectedIndex < g_numberOfItemsDisplayed - 1)
+    {
+        g_selectedIndex++;
+        if(g_selectedIndex > 0)
+        {
+            print_process_at_index(g_selectedIndex - 1);
+        }
+        print_process_at_index(g_selectedIndex);
+    }
+    LeaveCriticalSection(&SyncLock);
+}
+
+void process_list_select_previous()
+{
+    EnterCriticalSection(&SyncLock);
+    if(g_selectedIndex > 0)
+    {
+        g_selectedIndex--;
+        print_process_at_index(g_selectedIndex + 1);
+        print_process_at_index(g_selectedIndex);
+    }
+    LeaveCriticalSection(&SyncLock);
+}
+
 int _tmain(int argc, TCHAR *argv[])
 {
     UNREFERENCED_PARAMETER(argc);
@@ -2460,28 +2487,11 @@ int _tmain(int argc, TCHAR *argv[])
                             {
                                 case VK_DOWN:
                                 case VK_J:
-                                    EnterCriticalSection(&SyncLock);
-                                    if(g_selectedIndex < g_numberOfItemsDisplayed - 1)
-                                    {
-                                        g_selectedIndex++;
-                                        if(g_selectedIndex > 0)
-                                        {
-                                            print_process_at_index(g_selectedIndex - 1);
-                                        }
-                                        print_process_at_index(g_selectedIndex);
-                                    }
-                                    LeaveCriticalSection(&SyncLock);
+                                    process_list_select_next();
                                     break;
                                 case VK_K:
                                 case VK_UP:
-                                    EnterCriticalSection(&SyncLock);
-                                    if(g_selectedIndex > 0)
-                                    {
-                                        g_selectedIndex--;
-                                        print_process_at_index(g_selectedIndex + 1);
-                                        print_process_at_index(g_selectedIndex);
-                                    }
-                                    LeaveCriticalSection(&SyncLock);
+                                    process_list_select_previous();
                                     break;
                                 default:
                                     break;
@@ -2489,8 +2499,14 @@ int _tmain(int argc, TCHAR *argv[])
                         }
                         else if(g_mode == Search)
                         {
-                            switch(InputRecord.Event.KeyEvent.uChar.AsciiChar)
+                            switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
                             {
+                                case VK_DOWN:
+                                    process_list_select_next();
+                                    break;
+                                case VK_UP:
+                                    process_list_select_previous();
+                                    break;
                                 case VK_RETURN:
                                 case VK_ESCAPE:
                                     EnterCriticalSection(&SyncLock);
