@@ -290,6 +290,7 @@ int g_nameWidth = 0;
 
 Process *g_displayProcesses[1024];
 SHORT g_numberOfDisplayItems = 0;
+SHORT g_numberOfItemsDisplayed = 0;
 
 int g_scrollOffset = 0;
 
@@ -1440,6 +1441,7 @@ void print_processes(void)
     }
 
     clear_process_list_at_index(numberOfItemsToPrint);
+    g_numberOfItemsDisplayed = numberOfItemsToPrint;
 }
 
 void print_focused_process(Process *process)
@@ -2459,7 +2461,7 @@ int _tmain(int argc, TCHAR *argv[])
                                 case VK_DOWN:
                                 case VK_J:
                                     EnterCriticalSection(&SyncLock);
-                                    if(g_selectedIndex < g_processes_view_number_of_display_lines - 1)
+                                    if(g_selectedIndex < g_numberOfItemsDisplayed - 1)
                                     {
                                         g_selectedIndex++;
                                         if(g_selectedIndex > 0)
