@@ -501,7 +501,7 @@ static int ConPrintf(TCHAR *Fmt, ...)
     int CharsWritten = _vstprintf_s(Buffer, _countof(Buffer), Fmt, VaList);
     va_end(VaList);
 
-    if((g_mode != Help && g_mode != ProcessDetails) && g_mode != ReadingsList || !is_inside_vertical_of_rect(&cbsi.dwCursorPosition, &g_help_view_border_rect))
+    if((g_mode != Help && g_mode != ProcessDetails) && g_mode != ReadingsList && g_mode != ProcessHistory || !is_inside_vertical_of_rect(&cbsi.dwCursorPosition, &g_help_view_border_rect))
     {
         DWORD Dummy;
         WriteConsole(ConsoleHandle, Buffer, CharsWritten, &Dummy, 0);
@@ -1936,6 +1936,7 @@ void update_and_draw_cpu_readings(void)
 
 void draw_process_history(void)
 {
+    g_mode = ProcessHistory;
     int columnWidth = 12;
     int windowWidth = g_help_view_rect.right - g_help_view_rect.left - 1;
     int numberOfColumns = 8;
@@ -1988,7 +1989,7 @@ void draw_process_history(void)
 
     if(readingToShow)
     {
-        qsort(readingToShow->processes, readingToShow->numberOfProcesses - 1, sizeof(Process*), CompareProcessForSort);
+        qsort(readingToShow->processes, readingToShow->numberOfProcesses, sizeof(Process*), CompareProcessForSort);
         for(SHORT i = 0; i < readingToShow->numberOfProcesses && i < maxItems; i++)
         {
             SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + (SHORT)1 + i);
@@ -2259,6 +2260,14 @@ void process_list_select_previous()
     LeaveCriticalSection(&SyncLock);
 }
 
+void show_reading_list()
+{
+    EnterCriticalSection(&SyncLock);
+    update_and_draw_cpu_readings();
+    g_mode = ReadingsList;
+    LeaveCriticalSection(&SyncLock);
+}
+
 int _tmain(int argc, TCHAR *argv[])
 {
     UNREFERENCED_PARAMETER(argc);
@@ -2461,10 +2470,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     g_mode = Help;
                                     break;
                                 case '.':
-                                    EnterCriticalSection(&SyncLock);
-                                    update_and_draw_cpu_readings();
-                                    g_mode = ReadingsList;
-                                    LeaveCriticalSection(&SyncLock);
+                                    show_reading_list();
                                     break;
                                 case ',':
                                     EnterCriticalSection(&SyncLock);
@@ -2561,6 +2567,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     break;
                                 case 0x4C: //VK_L
                                     EnterCriticalSection(&SyncLock);
+                                    g_mode = ProcessHistory;
                                     draw_process_history();
                                     LeaveCriticalSection(&SyncLock);
                                     break;
@@ -2571,6 +2578,15 @@ int _tmain(int argc, TCHAR *argv[])
                                     draw_search_view();
                                     draw_processes_window();
                                     LeaveCriticalSection(&SyncLock);
+                                    break;
+                            }
+                        }
+                        else if(g_mode == ProcessHistory)
+                        {
+                            switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
+                            {
+                                case VK_ESCAPE:
+                                    show_reading_list();
                                     break;
                             }
                         }
