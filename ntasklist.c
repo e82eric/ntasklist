@@ -184,6 +184,7 @@ int g_numberOfThreads = 0;
 Process *g_processes[1024];
 int g_sortColumn = 5;
 SHORT g_selectedIndex = 0;
+SHORT g_numberOfDisplayedCpuReadings;
 DWORD g_focusedProcessPid;
 
 IoReading *g_ioReadings;
@@ -1890,6 +1891,8 @@ void draw_cpu_readings(void)
         i++;
         current = current->previous;
     }
+
+    g_numberOfDisplayedCpuReadings = i;
     SetColor(FOREGROUND_INTENSITY);
 }
 
@@ -2539,8 +2542,11 @@ int _tmain(int argc, TCHAR *argv[])
                                 case VK_J:
                                 case VK_DOWN:
                                     EnterCriticalSection(&SyncLock);
-                                    g_selectedCpuReadingIndex++;
-                                    draw_cpu_readings();
+                                    if(g_selectedCpuReadingIndex < g_numberOfDisplayedCpuReadings - 1)
+                                    {
+                                        g_selectedCpuReadingIndex++;
+                                        draw_cpu_readings();
+                                    }
                                     LeaveCriticalSection(&SyncLock);
                                     break;
                                 case VK_K:
@@ -2553,7 +2559,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     }
                                     LeaveCriticalSection(&SyncLock);
                                     break;
-                                case 0x4C:
+                                case 0x4C: //VK_L
                                     EnterCriticalSection(&SyncLock);
                                     draw_process_history();
                                     LeaveCriticalSection(&SyncLock);
