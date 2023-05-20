@@ -1637,6 +1637,7 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
         EnterCriticalSection(&SyncLock);
         add_memory_reading();
         CpuReading *reading = add_cpu_reading();
+        populate_processes(reading);
         if(g_mode == ProcessDetails)
         {
             Process process;
@@ -1645,7 +1646,6 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
         }
         else
         {
-            populate_processes(reading);
             qsort(g_processes, g_numberOfProcesses, sizeof(Process*), CompareProcessForSort);
             print_processes();
         }
