@@ -2062,8 +2062,8 @@ void draw_help_window(void)
     int numberOfLines = 17;
     TextLine textLines[MAX_PATH] = {
         { Header, "Navigation:" },
-        { Plain, "j/down arrow: down" },
-        { Plain, "k/up arrow: up" },
+        { Plain, "j/down arrow/ctl+n: down" },
+        { Plain, "k/up arrow/ctl+p: up" },
         { Plain, "ctl+e: scroll process list down one" },
         { Plain, "ctl+y: scroll process list up one" },
         { Plain, "ctl+d: scroll process list down 1/2 page" },
@@ -2374,27 +2374,13 @@ int _tmain(int argc, TCHAR *argv[])
                         }
                         else if(g_controlState)
                         {
-                            if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 0x50) //N
+                            if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 0x50) //P
                             {
-                                EnterCriticalSection(&SyncLock);
-                                if(g_selectedIndex > 0)
-                                {
-                                    g_selectedIndex--;
-                                    print_process_at_index(g_selectedIndex + 1);
-                                    print_process_at_index(g_selectedIndex);
-                                }
-                                LeaveCriticalSection(&SyncLock);
+                                process_list_select_previous();
                             }
-                            else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 0x4E) //P
+                            else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 0x4E) //N
                             {
-                                g_selectedIndex++;
-                                EnterCriticalSection(&SyncLock);
-                                if(g_selectedIndex > 0)
-                                {
-                                    print_process_at_index(g_selectedIndex - 1);
-                                }
-                                print_process_at_index(g_selectedIndex);
-                                LeaveCriticalSection(&SyncLock);
+                                process_list_select_next();
                                 break;
                             }
                             else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 	0x45) //E
