@@ -183,6 +183,7 @@ int g_processor_count_ = 0;
 int g_numberOfThreads = 0;
 Process *g_processes[1024];
 int g_sortColumn = 5;
+int g_processHistorySortColumn = 5;
 SHORT g_selectedIndex = 0;
 SHORT g_numberOfDisplayedCpuReadings;
 DWORD g_focusedProcessPid;
@@ -199,7 +200,6 @@ int g_memoryReadingIndex;
 DWORD g_largestMemoryReading;
 
 int g_numberOfDrives;
-/* Drive g_drives[MAX_PATH]; */
 
 char g_searchString[1024];
 SHORT g_searchStringIndex = 0;
@@ -1190,12 +1190,12 @@ void populate_process_from_pid(Process *process, HANDLE hProcess)
     process->workingSet = pmc.WorkingSetSize / 1024;
 }
 
-int CompareProcessForSort(const void *a, const void *b)
+int CompareProcessForSortImpl(const void *a, const void *b, int sortColumn)
 {
     Process *processA = *(Process **)a;
     Process *processB = *(Process **)b;
 
-    if(g_sortColumn == 1)
+    if(sortColumn == 1)
     {
         if(!processB->name)
         {
@@ -1208,23 +1208,35 @@ int CompareProcessForSort(const void *a, const void *b)
         int Compare = _tcsncicmp(processB->name, processA->name, MAX_PATH) * -1;
         return Compare;
     }
-    if(g_sortColumn == 2)
+    if(sortColumn == 2)
     {
         return (int)(processB->privateBytes - processA->privateBytes);
     }
-    if(g_sortColumn == 3)
+    if(sortColumn == 3)
     {
         return (int)(processB->workingSet - processA->workingSet);
     }
-    if(g_sortColumn == 4)
+    if(sortColumn == 4)
     {
         return (int)(processB->pid - processA->pid);
     }
-    if(g_sortColumn == 5)
+    if(sortColumn == 5)
     {
         return (int)((processB->cpuPercent * 10) - (processA->cpuPercent * 10));
     }
     return 0;
+}
+
+int CompareProcessForSortProcessHistory(const void *a, const void *b)
+{
+    int result = CompareProcessForSortImpl(a, b, g_processHistorySortColumn);
+    return result;
+}
+
+int CompareProcessForSort(const void *a, const void *b)
+{
+    int result = CompareProcessForSortImpl(a, b, g_sortColumn);
+    return result;
 }
 
 void populate_focused_process(Process *process)
@@ -1989,7 +2001,7 @@ void draw_process_history(void)
 
     if(readingToShow)
     {
-        qsort(readingToShow->processes, readingToShow->numberOfProcesses, sizeof(Process*), CompareProcessForSort);
+        qsort(readingToShow->processes, readingToShow->numberOfProcesses, sizeof(Process*), CompareProcessForSortProcessHistory);
         for(SHORT i = 0; i < readingToShow->numberOfProcesses && i < maxItems; i++)
         {
             SetConCursorPos(g_help_view_rect.left, g_help_view_rect.top + (SHORT)1 + i);
@@ -2268,6 +2280,14 @@ void show_reading_list()
     LeaveCriticalSection(&SyncLock);
 }
 
+void show_process_history()
+{
+    EnterCriticalSection(&SyncLock);
+    g_mode = ProcessHistory;
+    draw_process_history();
+    LeaveCriticalSection(&SyncLock);
+}
+
 int _tmain(int argc, TCHAR *argv[])
 {
     UNREFERENCED_PARAMETER(argc);
@@ -2363,26 +2383,6 @@ int _tmain(int argc, TCHAR *argv[])
                         if(InputRecord.Event.KeyEvent.wVirtualKeyCode == VK_CONTROL)
                         {
                             g_controlState = TRUE;
-                        }
-                        else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == VK_F1)
-                        {
-                            g_sortColumn = 1;
-                        }
-                        else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == VK_F2)
-                        {
-                            g_sortColumn = 2;
-                        }
-                        else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == VK_F3)
-                        {
-                            g_sortColumn = 3;
-                        }
-                        else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == VK_F4)
-                        {
-                            g_sortColumn = 4;
-                        }
-                        else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == VK_F5)
-                        {
-                            g_sortColumn = 5;
                         }
                         else if(g_controlState)
                         {
@@ -2492,6 +2492,21 @@ int _tmain(int argc, TCHAR *argv[])
                                 case VK_UP:
                                     process_list_select_previous();
                                     break;
+                                case VK_F1:
+                                    g_sortColumn = 1;
+                                    break;
+                                case VK_F2:
+                                    g_sortColumn = 2;
+                                    break;
+                                case VK_F3:
+                                    g_sortColumn = 3;
+                                    break;
+                                case VK_F4:
+                                    g_sortColumn = 4;
+                                    break;
+                                case VK_F5:
+                                    g_sortColumn = 5;
+                                    break;
                                 default:
                                     break;
                             }
@@ -2566,14 +2581,11 @@ int _tmain(int argc, TCHAR *argv[])
                                     LeaveCriticalSection(&SyncLock);
                                     break;
                                 case 0x4C: //VK_L
-                                    EnterCriticalSection(&SyncLock);
-                                    g_mode = ProcessHistory;
-                                    draw_process_history();
-                                    LeaveCriticalSection(&SyncLock);
+                                    show_process_history();
                                     break;
                                 case VK_ESCAPE:
-                                    g_mode = Normal;
                                     EnterCriticalSection(&SyncLock);
+                                    g_mode = Normal;
                                     draw_summary_window();
                                     draw_search_view();
                                     draw_processes_window();
@@ -2585,6 +2597,26 @@ int _tmain(int argc, TCHAR *argv[])
                         {
                             switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
                             {
+                                case VK_F1:
+                                    g_processHistorySortColumn = 1;
+                                    show_process_history();
+                                    break;
+                                case VK_F2:
+                                    g_processHistorySortColumn = 2;
+                                    show_process_history();
+                                    break;
+                                case VK_F3:
+                                    g_processHistorySortColumn = 3;
+                                    show_process_history();
+                                    break;
+                                case VK_F4:
+                                    g_processHistorySortColumn = 4;
+                                    show_process_history();
+                                    break;
+                                case VK_F5:
+                                    g_processHistorySortColumn = 5;
+                                    show_process_history();
+                                    break;
                                 case VK_ESCAPE:
                                     show_reading_list();
                                     break;
