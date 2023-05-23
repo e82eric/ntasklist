@@ -692,13 +692,6 @@ void fill_cpu_usage(CpuReading *toFill, CpuReading *lastReading)
         }
     }
 
-    MEMORYSTATUSEX statex;
-    statex.dwLength = sizeof (statex);
-
-    GlobalMemoryStatusEx (&statex);
-    toFill->availableMemory = statex.ullTotalPhys;
-    toFill->totalMemory = statex.ullAvailPhys;
-    toFill->memoryPercent = statex.dwMemoryLoad;
     toFill->numberOfProcesses = g_numberOfProcesses;
     toFill->numberOfThreads = g_numberOfThreads;
 }
@@ -746,14 +739,8 @@ void add_io_reading(float reads, float writes)
     }
 }
 
-void add_memory_reading()
+void add_memory_reading(DWORD value)
 {
-    MEMORYSTATUSEX statex;
-    statex.dwLength = sizeof (statex);
-    GlobalMemoryStatusEx (&statex);
-
-    DWORD value = statex.dwMemoryLoad;
-
     if(!g_memoryReadings)
     {
         g_memoryReadings = calloc(1, sizeof(MemoryReading));
@@ -786,7 +773,7 @@ void add_memory_reading()
     }
 }
 
-CpuReading *add_cpu_reading(void)
+CpuReading *add_cpu_reading(DWORDLONG availableMemory, DWORDLONG totalMemory, DWORD memoryPercent)
 {
     CpuReading *result;
     if(!g_cpuReadings)
@@ -828,6 +815,10 @@ CpuReading *add_cpu_reading(void)
 
         result = cpuReading;
     }
+
+    result->availableMemory = availableMemory;
+    result->totalMemory = totalMemory;
+    result->memoryPercent = memoryPercent;
 
     if(result->value > g_largestCpuReading)
     {
@@ -971,19 +962,15 @@ void paint_memory_graph_window()
     }
 }
 
-void refreshsummary()
+void refreshsummary(DWORDLONG availableMemory, DWORDLONG totalMemory, DWORD memoryPercent)
 {
     g_upTime = GetTickCount64();
 
-    MEMORYSTATUSEX statex;
-    statex.dwLength = sizeof (statex);
-    GlobalMemoryStatusEx (&statex);
-
     CHAR totalMemoryInUnits[MAX_PATH];
-    fill_size_in_units(totalMemoryInUnits, MAX_PATH, statex.ullTotalPhys);
+    fill_size_in_units(totalMemoryInUnits, MAX_PATH, totalMemory);
 
     CHAR availableMemoryInUnits[MAX_PATH];
-    fill_size_in_units(availableMemoryInUnits, MAX_PATH, statex.ullAvailPhys);
+    fill_size_in_units(availableMemoryInUnits, MAX_PATH, availableMemory);
 
     int cpuPercent = 0;
     if(g_lastCpuReading)
@@ -1011,7 +998,7 @@ void refreshsummary()
             memStr,
             MAX_PATH,
             "%3d%%",
-            statex.dwMemoryLoad);
+            memoryPercent);
 
     SetConCursorPos(g_summary_view_left, g_summary_view_top);
     ConPrintf(
@@ -1650,8 +1637,14 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
     while(1)
     {
         EnterCriticalSection(&SyncLock);
-        add_memory_reading();
-        CpuReading *reading = add_cpu_reading();
+
+        MEMORYSTATUSEX statex;
+        statex.dwLength = sizeof (statex);
+        GlobalMemoryStatusEx (&statex);
+
+        add_memory_reading(statex.dwMemoryLoad);
+
+        CpuReading *reading = add_cpu_reading(statex.ullAvailPhys, statex.ullTotalPhys, statex.dwMemoryLoad);
         populate_processes(reading);
         if(g_mode == ProcessDetails)
         {
@@ -1665,7 +1658,7 @@ DWORD WINAPI StatRefreshThreadProc(LPVOID lpParam)
             print_processes();
         }
 
-        refreshsummary();
+        refreshsummary(statex.ullAvailPhys, statex.ullTotalPhys, statex.dwMemoryLoad);
         paint_cpu_graph_window();
         paint_io_graph_window();
         paint_memory_graph_window();
@@ -2150,8 +2143,6 @@ void draw_summary_window(void)
     draw_box(g_cpu_graph_border_top, g_cpu_graph_border_bottom, g_cpu_graph_border_left, g_cpu_graph_border_right - g_cpu_graph_border_left);
     draw_box(g_io_graph_border_top, g_io_graph_border_bottom, g_io_graph_border_left, g_io_graph_border_right - g_io_graph_border_left);
     draw_box(g_memory_graph_border_top, g_memory_graph_border_bottom, g_memory_graph_border_left, g_memory_graph_border_right - g_memory_graph_border_left);
-
-    refreshsummary();
 }
 
 void draw_search_view(void)
