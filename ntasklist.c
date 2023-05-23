@@ -792,7 +792,6 @@ CpuReading *add_cpu_reading(void)
     if(!g_cpuReadings)
     {
         g_cpuReadings = calloc(1, sizeof(CpuReading));
-        g_cpuReadings->processes = calloc(g_numberOfProcesses, sizeof(Process));
         fill_cpu_usage(g_cpuReadings, NULL);
         g_lastCpuReading = g_cpuReadings;
         g_cpuReadingIndex = 1;
@@ -801,7 +800,6 @@ CpuReading *add_cpu_reading(void)
     else
     {
         CpuReading *cpuReading = calloc(1, sizeof(CpuReading));
-        cpuReading->processes = calloc(g_numberOfProcesses, sizeof(Process*));
         fill_cpu_usage(cpuReading, g_lastCpuReading);
         cpuReading->previous = g_lastCpuReading;
         g_lastCpuReading->next = cpuReading;
@@ -829,11 +827,6 @@ CpuReading *add_cpu_reading(void)
         }
 
         result = cpuReading;
-    }
-
-    for(int i = 0; i < g_numberOfProcesses; i++)
-    {
-        result->processes[i] = g_processes[i];
     }
 
     if(result->value > g_largestCpuReading)
@@ -1318,6 +1311,13 @@ void populate_processes(CpuReading *reading)
     }
 
     g_numberOfLastProcessIoReadings = g_numberOfProcesses;
+
+    reading->processes = calloc(g_numberOfProcesses, sizeof(Process*));
+    reading->numberOfProcesses = g_numberOfProcesses;
+    for(int i = 0; i < g_numberOfProcesses; i++)
+    {
+        reading->processes[i] = g_processes[i];
+    }
 }
 
 void print_process_at_index(SHORT index)
