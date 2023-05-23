@@ -828,13 +828,13 @@ CpuReading *add_cpu_reading(DWORDLONG availableMemory, DWORDLONG totalMemory, DW
     return result;
 }
 
-void paint_graph_axis_markers(SHORT areaLeft, SHORT areaBottom, SHORT axisLeft, SHORT axisTop, float maxValue, float axisMax)
+void paint_graph_axis_markers(SHORT areaLeft, SHORT areaBottom, SHORT axisLeft, SHORT axisTop, float maxValue, float axisMax, float curValue)
 {
     CHAR ioAxisStr[MAX_PATH];
     sprintf_s(
             ioAxisStr,
             25,
-            "%-8.1f",
+            "%-5.1f",
             axisMax);
     SetConCursorPos(axisLeft, axisTop);
 
@@ -842,9 +842,16 @@ void paint_graph_axis_markers(SHORT areaLeft, SHORT areaBottom, SHORT axisLeft, 
     sprintf_s(
             maxStr,
             25,
-            "%-8.1f",
+            "%-5.1f",
             maxValue);
-    ConPrintf("(y) %s  (max) %s", ioAxisStr, maxStr);
+
+    CHAR curStr[MAX_PATH];
+    sprintf_s(
+            curStr,
+            25,
+            "%-5.1f",
+            curValue);
+    ConPrintf("(y) %s  (max) %s (cur) %s", ioAxisStr, maxStr, curStr);
 
     for(SHORT i = 0; i < 10; i++)
     {
@@ -905,7 +912,14 @@ void paint_cpu_graph_window()
 
     SetConCursorPos(g_cpu_graph_border_left + headerLeft, g_cpu_graph_border_top);
     ConPrintf(" %s ", "CPU (%)");
-    paint_graph_axis_markers(g_cpu_graph_border_left + 1, g_cpu_graph_bottom, g_cpu_graph_axis_left, g_cpu_graph_top, g_largestCpuReading, 100);
+    paint_graph_axis_markers(
+            g_cpu_graph_border_left + 1,
+            g_cpu_graph_bottom,
+            g_cpu_graph_axis_left,
+            g_cpu_graph_top,
+            g_largestCpuReading,
+            100,
+            g_lastCpuReading->value);
     SHORT readingIndex = 0;
 
     CpuReading *currentReading = g_cpuReadings;
@@ -927,7 +941,14 @@ void paint_io_graph_window()
     SetConCursorPos(g_io_graph_border_left + headerLeft, g_io_graph_border_top);
     ConPrintf(" %s ", "IO");
 
-    paint_graph_axis_markers(g_io_graph_left, g_io_graph_bottom, g_io_graph_axis_left, g_io_graph_top, g_largestIoReading, g_largestIoReading + 1000);
+    paint_graph_axis_markers(
+            g_io_graph_left,
+            g_io_graph_bottom,
+            g_io_graph_axis_left,
+            g_io_graph_top,
+            g_largestIoReading,
+            g_largestIoReading + 1000,
+            g_lastIoReading->readsPerSecond + g_ioReadings->writesPerSecond);
     SHORT readingIndex = 0;
 
     IoReading *currentReading = g_ioReadings;
@@ -950,7 +971,14 @@ void paint_memory_graph_window()
     SetConCursorPos(g_memory_graph_border_left + headerLeft, g_memory_graph_border_top);
     ConPrintf(" %s ", "Mem (%)");
 
-    paint_graph_axis_markers(g_memory_graph_left, g_memory_graph_bottom, g_memory_graph_axis_left, g_memory_graph_top, g_largestMemoryReading, 100);
+    paint_graph_axis_markers(
+            g_memory_graph_left,
+            g_memory_graph_bottom,
+            g_memory_graph_axis_left,
+            g_memory_graph_top,
+            g_largestMemoryReading,
+            100,
+            g_lastCpuReading->memoryPercent);
     SHORT readingIndex = 0;
 
     MemoryReading *currentReading = g_memoryReadings;
