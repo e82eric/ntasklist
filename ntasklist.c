@@ -1345,7 +1345,9 @@ void print_process_at_index(SHORT index)
     CHAR workingSetFormatedStr[MAX_PATH];
     FormatNumber(workingSetFormatedStr, process->workingSet, &g_numFmt);
 
-    SetConCursorPos(g_processes_view_left, g_processes_view_top + index);
+    SetConCursorPos(g_processes_view_left - 1, g_processes_view_top + index);
+    /* ConPutc(' '); */
+    /* SetConCursorPos(g_processes_view_left, g_processes_view_top + index); */
     if(index == g_selectedIndex)
     {
         SetColor(BACKGROUND_WHITE);
@@ -1374,8 +1376,6 @@ void print_process_at_index(SHORT index)
             process->ioReadsPerSecond,
             process->ioWritesPerSecond);
 
-    assert(chars <= g_processes_view_right - g_processes_view_left + 1);
-
     if(pos)
     {
         if(index == g_selectedIndex)
@@ -1390,7 +1390,6 @@ void print_process_at_index(SHORT index)
         {
             for(int i = 0; i < pos->size; i++)
             {
-
                 SetConCursorPos(g_processes_view_left + (SHORT)pos->data[i], g_processes_view_top + index);
                 ConPutc(process->name[pos->data[i]]);
             }
@@ -1407,7 +1406,7 @@ void clear_process_list_at_index(SHORT index)
     DWORD cCharsWritten;
     for(SHORT i = index; i < g_processes_view_number_of_display_lines; i++)
     {
-        COORD coordScreen = { g_processes_view_left, g_processes_view_top + i };
+        COORD coordScreen = { g_processes_view_left - 1, g_processes_view_top + i };
         FillConsoleOutputAttribute(ConsoleHandle,
                 FOREGROUND_INTENSITY,
                 g_processes_view_right - g_processes_view_left + 1,
@@ -1812,7 +1811,7 @@ void calcuate_layout(void)
     g_processes_view_number_of_display_lines = g_processes_view_bottom - g_processes_view_top + 1;
 
     int nonNameWidth = 1 + 8 + 1 + 20 + 1 + 8 + 1 + 20 + 1 + 8 + 1 + 8 + 1 + 8 + 13;
-    g_nameWidth = g_processes_view_right - g_processes_view_left - nonNameWidth;
+    g_nameWidth = g_processes_view_right - g_processes_view_left - nonNameWidth + 1;
 }
 
 void print_cpu_reading_at_index(CpuReading *reading, SHORT index)
@@ -2096,7 +2095,7 @@ void draw_process_history(void)
 
 void draw_help_window(void)
 {
-    int numberOfLines = 17;
+    int numberOfLines = 25;
     TextLine textLines[MAX_PATH] = {
         { Header, "Navigation:" },
         { Plain, "j/down arrow/ctl+n: down" },
@@ -2148,7 +2147,7 @@ void draw_processes_window(void)
 {
     draw_box(g_processes_view_border_top, g_processes_view_border_bottom, g_processes_view_border_left, g_processes_view_border_right);
     SetColor(FOREGROUND_CYAN);
-    SetConCursorPos(g_processes_view_header_left, g_processes_view_header_top);
+    SetConCursorPos(g_processes_view_header_left - 1, g_processes_view_header_top);
     ConPrintf(
             "%-*s %8s %13s %20s %20s %8s %8s %8s %8s",
             g_nameWidth,
@@ -2178,15 +2177,14 @@ void draw_search_view(void)
     if(g_mode == Search)
     {
         draw_box(g_search_view_border_top, g_search_view_border_bottom, g_search_view_border_left, g_search_view_border_right);
-        for(SHORT i = g_searchStringIndex; i < g_searchStringIndex + 5; i++)
+        int width = g_search_view_border_right - g_search_view_border_left - 3;
+        for(SHORT i = g_searchStringIndex; i < width; i++)
         {
             SetConCursorPos(g_search_view_left + i, g_search_view_top); 
             ConPutc(' ');
         }
-        SetConCursorPos(g_search_view_left, g_search_view_top); 
-        ConPrintf(
-                "> %s",
-                g_searchString);
+        SetConCursorPos(g_search_view_border_left + 1, g_search_view_top); 
+        ConPrintf("> %s", g_searchString);
     }
 }
 
@@ -2307,6 +2305,38 @@ void show_process_history()
     LeaveCriticalSection(&SyncLock);
 }
 
+void search_view_clear(void)
+{
+    if(g_searchStringIndex > 0)
+    {
+        EnterCriticalSection(&SyncLock);
+        g_searchStringIndex = 0;
+        g_searchString[0] = '\0';
+        draw_search_view();
+        LeaveCriticalSection(&SyncLock);
+    }
+}
+
+void search_delete_word(void)
+{
+    if(g_searchStringIndex > 0)
+    {
+        EnterCriticalSection(&SyncLock);
+        for(SHORT i = g_searchStringIndex - 1; i >= 0; i--)
+        {
+            char c = g_searchString[i];
+            if(!isdigit(c) && !isalpha(c) || i == 0)
+            {
+                g_searchStringIndex = i;
+                g_searchString[i] = '\0';
+                break;
+            }
+        }
+        draw_search_view();
+        LeaveCriticalSection(&SyncLock);
+    }
+}
+
 int _tmain(int argc, TCHAR *argv[])
 {
     UNREFERENCED_PARAMETER(argc);
@@ -2405,66 +2435,69 @@ int _tmain(int argc, TCHAR *argv[])
                         }
                         else if(g_controlState)
                         {
-                            if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 0x50) //P
+                            switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
                             {
-                                process_list_select_previous();
-                            }
-                            else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 0x4E) //N
-                            {
-                                process_list_select_next();
-                                break;
-                            }
-                            else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 	0x45) //E
-                            {
-                                if(g_scrollOffset < g_numberOfDisplayItems - g_processes_view_number_of_display_lines)
-                                {
+                                case 0x4C:
+                                    search_view_clear();
+                                    break;
+                                case VK_BACK:
+                                case 0x57:
+                                    search_delete_word();
+                                    break;
+                                case 0x50:
+                                    process_list_select_previous();
+                                    break;
+                                case 0x4E: //N
+                                    process_list_select_next();
+                                case 0x45: //E
+                                    if(g_scrollOffset < g_numberOfDisplayItems - g_processes_view_number_of_display_lines)
+                                    {
+                                        EnterCriticalSection(&SyncLock);
+                                        g_scrollOffset++;
+                                        print_processes();
+                                        LeaveCriticalSection(&SyncLock);
+                                    }
+                                    break;
+                                case 0x59: //Y
+                                    if(g_scrollOffset > 0)
+                                    {
+                                        EnterCriticalSection(&SyncLock);
+                                        g_scrollOffset--;
+                                        print_processes();
+                                        LeaveCriticalSection(&SyncLock);
+                                    }
+                                    break;
+                                case 0x44: //D
                                     EnterCriticalSection(&SyncLock);
-                                    g_scrollOffset++;
+                                    if(g_scrollOffset + (g_processes_view_number_of_display_lines * 2) < g_numberOfDisplayItems)
+                                    {
+                                        g_scrollOffset = g_scrollOffset + g_processes_view_number_of_display_lines;
+                                    }
+                                    else
+                                    {
+                                        g_scrollOffset = g_numberOfDisplayItems - g_processes_view_number_of_display_lines;
+                                    }
                                     print_processes();
                                     LeaveCriticalSection(&SyncLock);
-                                }
-                            }
-                            else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 	0x59) //Y
-                            {
-                                if(g_scrollOffset > 0)
-                                {
+                                    break;
+                                case 0x55: //U
                                     EnterCriticalSection(&SyncLock);
-                                    g_scrollOffset--;
+                                    if(g_scrollOffset - g_processes_view_number_of_display_lines > 0)
+                                    {
+                                        g_scrollOffset = g_scrollOffset - g_processes_view_number_of_display_lines;
+                                    }
+                                    else
+                                    {
+                                        g_scrollOffset = 0;
+                                    }
                                     print_processes();
                                     LeaveCriticalSection(&SyncLock);
-                                }
-                            }
-                            else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 0x44) //D
-                            {
-                                EnterCriticalSection(&SyncLock);
-                                if(g_scrollOffset + (g_processes_view_number_of_display_lines * 2) < g_numberOfDisplayItems)
-                                {
-                                    g_scrollOffset = g_scrollOffset + g_processes_view_number_of_display_lines;
-                                }
-                                else
-                                {
-                                    g_scrollOffset = g_numberOfDisplayItems - g_processes_view_number_of_display_lines;
-                                }
-                                print_processes();
-                                LeaveCriticalSection(&SyncLock);
-                            }
-                            else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 0x55) //U
-                            {
-                                EnterCriticalSection(&SyncLock);
-                                if(g_scrollOffset - g_processes_view_number_of_display_lines > 0)
-                                {
-                                    g_scrollOffset = g_scrollOffset - g_processes_view_number_of_display_lines;
-                                }
-                                else
-                                {
-                                    g_scrollOffset = 0;
-                                }
-                                print_processes();
-                                LeaveCriticalSection(&SyncLock);
-                            }
-                            else if(InputRecord.Event.KeyEvent.wVirtualKeyCode == 0x4B)
-                            {
-                                kill_process(g_displayProcesses[g_selectedIndex]);
+                                    break;
+                                case 0x4B:
+                                    kill_process(g_displayProcesses[g_selectedIndex]);
+                                    break;
+                                default:
+                                    break;
                             }
                         }
                         else if(g_mode == Normal)
@@ -2474,7 +2507,6 @@ int _tmain(int argc, TCHAR *argv[])
                                 case '/':
                                     EnterCriticalSection(&SyncLock);
                                     g_mode = Search;
-                                    clear_screen();
                                     calcuate_layout();
                                     draw_summary_window();
                                     draw_search_view();
@@ -2544,7 +2576,6 @@ int _tmain(int argc, TCHAR *argv[])
                                 case VK_ESCAPE:
                                     EnterCriticalSection(&SyncLock);
                                     g_mode = Normal;
-                                    clear_screen();
                                     calcuate_layout();
                                     paint_cpu_graph_window();
                                     draw_summary_window();
@@ -2568,6 +2599,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     {
                                         EnterCriticalSection(&SyncLock);
                                         g_searchString[g_searchStringIndex] = InputRecord.Event.KeyEvent.uChar.AsciiChar;
+                                        g_searchString[g_searchStringIndex + 1] = '\0';
                                         g_searchStringIndex++;
                                         draw_search_view();
                                         LeaveCriticalSection(&SyncLock);
