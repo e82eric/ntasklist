@@ -23,6 +23,16 @@
 
 #define VK_J 0x4A
 #define VK_K 0x4B
+#define VK_L 0x4c
+#define VK_W 0x57
+#define VK_P 0x50
+#define VK_N 0x4E
+#define VK_E 0x45
+#define VK_Y 0x59
+#define VK_D 0x44
+#define VK_U 0x55
+#define VK_K 0x4B
+#define VK_Q 0x51
 
 static SHORT Width;
 static SHORT Height;
@@ -2421,9 +2431,9 @@ int _tmain(int argc, TCHAR *argv[])
                     {
                         if(g_mode != Search)
                         {
-                            switch(InputRecord.Event.KeyEvent.uChar.AsciiChar)
+                            switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
                             {
-                                case 'q':
+                                case VK_Q:
                                     return EXIT_SUCCESS;
                                     break;
                             }
@@ -2437,19 +2447,19 @@ int _tmain(int argc, TCHAR *argv[])
                         {
                             switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
                             {
-                                case 0x4C:
+                                case VK_L:
                                     search_view_clear();
                                     break;
                                 case VK_BACK:
-                                case 0x57:
+                                case VK_W:
                                     search_delete_word();
                                     break;
-                                case 0x50:
+                                case VK_P:
                                     process_list_select_previous();
                                     break;
-                                case 0x4E: //N
+                                case VK_N:
                                     process_list_select_next();
-                                case 0x45: //E
+                                case VK_E:
                                     if(g_scrollOffset < g_numberOfDisplayItems - g_processes_view_number_of_display_lines)
                                     {
                                         EnterCriticalSection(&SyncLock);
@@ -2458,7 +2468,7 @@ int _tmain(int argc, TCHAR *argv[])
                                         LeaveCriticalSection(&SyncLock);
                                     }
                                     break;
-                                case 0x59: //Y
+                                case VK_Y:
                                     if(g_scrollOffset > 0)
                                     {
                                         EnterCriticalSection(&SyncLock);
@@ -2467,7 +2477,7 @@ int _tmain(int argc, TCHAR *argv[])
                                         LeaveCriticalSection(&SyncLock);
                                     }
                                     break;
-                                case 0x44: //D
+                                case VK_D:
                                     EnterCriticalSection(&SyncLock);
                                     if(g_scrollOffset + (g_processes_view_number_of_display_lines * 2) < g_numberOfDisplayItems)
                                     {
@@ -2480,7 +2490,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     print_processes();
                                     LeaveCriticalSection(&SyncLock);
                                     break;
-                                case 0x55: //U
+                                case VK_U:
                                     EnterCriticalSection(&SyncLock);
                                     if(g_scrollOffset - g_processes_view_number_of_display_lines > 0)
                                     {
@@ -2493,7 +2503,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     print_processes();
                                     LeaveCriticalSection(&SyncLock);
                                     break;
-                                case 0x4B:
+                                case VK_K:
                                     kill_process(g_displayProcesses[g_selectedIndex]);
                                     break;
                                 default:
@@ -2502,28 +2512,33 @@ int _tmain(int argc, TCHAR *argv[])
                         }
                         else if(g_mode == Normal)
                         {
-                            switch(InputRecord.Event.KeyEvent.uChar.AsciiChar)
+                            switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
                             {
-                                case '/':
-                                    EnterCriticalSection(&SyncLock);
-                                    g_mode = Search;
-                                    calcuate_layout();
-                                    draw_summary_window();
-                                    draw_search_view();
-                                    draw_processes_window();
-                                    LeaveCriticalSection(&SyncLock);
-                                    break;
-                                case 'l':
+                                case VK_RETURN:
+                                case VK_L:
                                     focus_current_process();
                                     break;
-                                case '?':
-                                    draw_help_window();
-                                    g_mode = Help;
+                                case VK_OEM_2:
+                                    if(GetAsyncKeyState(VK_SHIFT))
+                                    {
+                                        draw_help_window();
+                                        g_mode = Help;
+                                    }
+                                    else
+                                    {
+                                        EnterCriticalSection(&SyncLock);
+                                        g_mode = Search;
+                                        calcuate_layout();
+                                        draw_summary_window();
+                                        draw_search_view();
+                                        draw_processes_window();
+                                        LeaveCriticalSection(&SyncLock);
+                                    }
                                     break;
-                                case '.':
+                                case VK_OEM_PERIOD:
                                     show_reading_list();
                                     break;
-                                case ',':
+                                case VK_OEM_COMMA:
                                     EnterCriticalSection(&SyncLock);
                                     g_searchString[0] = '\0';
                                     g_searchStringIndex = 0;
@@ -2631,7 +2646,8 @@ int _tmain(int argc, TCHAR *argv[])
                                     }
                                     LeaveCriticalSection(&SyncLock);
                                     break;
-                                case 0x4C: //VK_L
+                                case VK_RETURN:
+                                case VK_L:
                                     show_process_history();
                                     break;
                                 case VK_ESCAPE:
@@ -2675,7 +2691,7 @@ int _tmain(int argc, TCHAR *argv[])
                         }
                         else if(g_mode == Help || g_mode == ProcessDetails || g_mode == ReadingsList)
                         {
-                            switch(InputRecord.Event.KeyEvent.uChar.AsciiChar)
+                            switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
                             {
                                 case VK_ESCAPE:
                                     g_mode = Normal;
@@ -2685,7 +2701,7 @@ int _tmain(int argc, TCHAR *argv[])
                                     draw_processes_window();
                                     LeaveCriticalSection(&SyncLock);
                                     break;
-                                case 'q':
+                                case VK_Q:
                                     return EXIT_SUCCESS;
                                     break;
                             }
