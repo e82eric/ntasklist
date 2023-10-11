@@ -2347,6 +2347,36 @@ void search_delete_word(void)
     }
 }
 
+void process_list_page_up(void)
+{
+    EnterCriticalSection(&SyncLock);
+    if(g_scrollOffset - g_processes_view_number_of_display_lines > 0)
+    {
+        g_scrollOffset = g_scrollOffset - g_processes_view_number_of_display_lines;
+    }
+    else
+    {
+        g_scrollOffset = 0;
+    }
+    print_processes();
+    LeaveCriticalSection(&SyncLock);
+}
+
+void process_list_page_down(void)
+{
+    EnterCriticalSection(&SyncLock);
+    if(g_scrollOffset + (g_processes_view_number_of_display_lines * 2) < g_numberOfDisplayItems)
+    {
+        g_scrollOffset = g_scrollOffset + g_processes_view_number_of_display_lines;
+    }
+    else
+    {
+        g_scrollOffset = g_numberOfDisplayItems - g_processes_view_number_of_display_lines;
+    }
+    print_processes();
+    LeaveCriticalSection(&SyncLock);
+}
+
 int _tmain(int argc, TCHAR *argv[])
 {
     UNREFERENCED_PARAMETER(argc);
@@ -2454,66 +2484,60 @@ int _tmain(int argc, TCHAR *argv[])
                                 case VK_W:
                                     search_delete_word();
                                     break;
-                                case VK_P:
-                                    process_list_select_previous();
-                                    break;
-                                case VK_N:
-                                    process_list_select_next();
-                                case VK_E:
-                                    if(g_scrollOffset < g_numberOfDisplayItems - g_processes_view_number_of_display_lines)
-                                    {
-                                        EnterCriticalSection(&SyncLock);
-                                        g_scrollOffset++;
-                                        print_processes();
-                                        LeaveCriticalSection(&SyncLock);
-                                    }
-                                    break;
-                                case VK_Y:
-                                    if(g_scrollOffset > 0)
-                                    {
-                                        EnterCriticalSection(&SyncLock);
-                                        g_scrollOffset--;
-                                        print_processes();
-                                        LeaveCriticalSection(&SyncLock);
-                                    }
-                                    break;
-                                case VK_D:
-                                    EnterCriticalSection(&SyncLock);
-                                    if(g_scrollOffset + (g_processes_view_number_of_display_lines * 2) < g_numberOfDisplayItems)
-                                    {
-                                        g_scrollOffset = g_scrollOffset + g_processes_view_number_of_display_lines;
-                                    }
-                                    else
-                                    {
-                                        g_scrollOffset = g_numberOfDisplayItems - g_processes_view_number_of_display_lines;
-                                    }
-                                    print_processes();
-                                    LeaveCriticalSection(&SyncLock);
-                                    break;
-                                case VK_U:
-                                    EnterCriticalSection(&SyncLock);
-                                    if(g_scrollOffset - g_processes_view_number_of_display_lines > 0)
-                                    {
-                                        g_scrollOffset = g_scrollOffset - g_processes_view_number_of_display_lines;
-                                    }
-                                    else
-                                    {
-                                        g_scrollOffset = 0;
-                                    }
-                                    print_processes();
-                                    LeaveCriticalSection(&SyncLock);
-                                    break;
-                                case VK_K:
-                                    kill_process(g_displayProcesses[g_selectedIndex]);
-                                    break;
                                 default:
                                     break;
                             }
                         }
-                        else if(g_mode == Normal)
+                        if(g_mode == Normal)
                         {
+                            if(g_controlState)
+                            {
+                                switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
+                                {
+                                    case VK_P:
+                                        process_list_select_previous();
+                                        break;
+                                    case VK_N:
+                                        process_list_select_next();
+                                    case VK_E:
+                                        if(g_scrollOffset < g_numberOfDisplayItems - g_processes_view_number_of_display_lines)
+                                        {
+                                            EnterCriticalSection(&SyncLock);
+                                            g_scrollOffset++;
+                                            print_processes();
+                                            LeaveCriticalSection(&SyncLock);
+                                        }
+                                        break;
+                                    case VK_Y:
+                                        if(g_scrollOffset > 0)
+                                        {
+                                            EnterCriticalSection(&SyncLock);
+                                            g_scrollOffset--;
+                                            print_processes();
+                                            LeaveCriticalSection(&SyncLock);
+                                        }
+                                        break;
+                                    case VK_D:
+                                        process_list_page_down();
+                                        break;
+                                    case VK_U:
+                                        process_list_page_up();
+                                        break;
+                                    case VK_K:
+                                        kill_process(g_displayProcesses[g_selectedIndex]);
+                                        break;
+                                    default:
+                                        break;
+                                }
+                            }
                             switch(InputRecord.Event.KeyEvent.wVirtualKeyCode)
                             {
+                                case VK_NEXT:
+                                    process_list_page_down();
+                                    break;
+                                case VK_PRIOR:
+                                    process_list_page_up();
+                                    break;
                                 case VK_RETURN:
                                 case VK_L:
                                     focus_current_process();
